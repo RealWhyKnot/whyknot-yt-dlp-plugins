@@ -4,13 +4,21 @@ build-backend = "hatchling.build"
 
 [project]
 name = "whyknot-yt-dlp-plugins"
-version = "0.1.0"
+version = "0.1.1"
 description = "Custom yt-dlp extractors for sites WhyKnot.dev resolves"
 readme = "README.md"
 license = "MIT"
 authors = [{ name = "WhyKnot" }]
 requires-python = ">=3.9"
-dependencies = ["yt-dlp"]
+# yt-dlp is intentionally NOT listed as a runtime dependency. The plugin is a
+# yt-dlp drop-in -- it requires yt-dlp at import time but does not vendor it.
+# Listing yt-dlp here causes pip/uv resolvers to "fix" the installed yt-dlp
+# version on plugin install, which clobbers `--pre` (nightly) installs back
+# down to the latest stable. The plugin loader walks installed packages for
+# the `yt_dlp_plugins.extractor` namespace; co-residency in the same env is
+# sufficient. Don't reintroduce this dependency without re-confirming the
+# regression behaviour on a node that's pinned to nightly.
+dependencies = []
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: End Users/Desktop",

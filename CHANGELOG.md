@@ -12,6 +12,16 @@ _No notable changes since the last release._
 
 ---
 
+## [v2026.5.5.0](https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins/releases/tag/v2026.5.5.0) - 2026-05-05
+_No notable changes since the last release._
+
+---
+
+## [v2026.5.5.0](https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins/releases/tag/v2026.5.5.0) - 2026-05-05
+_No notable changes since the last release._
+
+---
+
 ## [v2026.5.5.0] - 2026-05-05
 
 ### Added

@@ -8,23 +8,13 @@ release versioning where N is the daily build counter starting at 0).
 
 ## Unreleased
 
-
 ### Fixed
-- **ci:** Use -v --simulate for plugin discovery (--list-extractors omits external plugin IEs) (b1438fc)
+
+- **ci:** Use `-v --simulate` for plugin discovery (`--list-extractors` omits external plugin IEs) (b1438fc)
 
 ---
 
 ## [v2026.5.5.0](https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins/releases/tag/v2026.5.5.0) - 2026-05-05
-_No notable changes since the last release._
-
----
-
-## [v2026.5.5.0](https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins/releases/tag/v2026.5.5.0) - 2026-05-05
-_No notable changes since the last release._
-
----
-
-## [v2026.5.5.0] - 2026-05-05
 
 ### Added
 

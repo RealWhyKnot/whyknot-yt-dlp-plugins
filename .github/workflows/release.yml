@@ -138,27 +138,11 @@ jobs:
             --title "$TAG_NAME" \
             --notes-file "$notes_file"
 
-      - name: Commit promoted changelog back to main
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          # The tag pointed at a specific commit; we want main to also carry
-          # the promoted CHANGELOG.md so the next push doesn't re-add the same
-          # bullets to "## Unreleased".
-          git config user.name  'github-actions[bot]'
-          git config user.email 'github-actions[bot]@users.noreply.github.com'
-          git checkout main
-          git pull --rebase origin main || true
-          # Re-promote on the freshly-pulled main (the tag commit may have been
-          # earlier than HEAD; we want HEAD's Unreleased section promoted).
-          python3 .github/scripts/promote_changelog.py --tag "$TAG_NAME"
-          if git diff --quiet CHANGELOG.md; then
-            echo "Nothing to promote on main."
-          else
-            git add CHANGELOG.md
-            git commit -m "docs(changelog): promote Unreleased -> ${TAG_NAME} [skip changelog]"
-            git push origin main
-          fi
+      # NOTE: deliberately not committing the promoted CHANGELOG.md back to
+       # main. The double-promote on tag created duplicate empty headings
+       # in v2026.5.5.0's run. The release artifact (sdist/wheel) attached
+       # to the GH release is the durable record; main's "## Unreleased"
+       # section gets new bullets via the next changelog-append run, and
+       # the next tag promote handles the heading rename. If we want main's
+       # CHANGELOG to track tagged sections in real time, redo this step
+       # with a guard ("only promote if Unreleased contains real bullets").

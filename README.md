@@ -1,47 +1,28 @@
 # whyknot-yt-dlp-plugins
 
-Custom yt-dlp extractors for sites that yt-dlp doesn't natively support but [WhyKnot.dev](https://whyknot.dev) needs to resolve for VRChat playback.
+**Custom yt-dlp extractors for sites WhyKnot.dev resolves.**
 
-This package gets installed into the production WhyKnot nodes' yt-dlp venv, and yt-dlp picks it up automatically at startup. New extractors land here and ship to production within 24 hours via the nightly auto-update cron.
+When a site isn't natively supported by yt-dlp but [WhyKnot.dev](https://whyknot.dev) needs to play it through VRChat, the extractor lives here. Production WhyKnot.dev nodes pick up new commits within seconds via a push webhook (cron-fallback within 24h), validate via smoke, and roll back on failure.
 
-## Repository structure
+> **Status: alpha.** Plugin discovery + auto-update plumbing are stable; the extractor catalogue is bootstrap-thin until real sites land.
 
-```
-yt_dlp_plugins/
-  extractor/
-    __init__.py
-    placeholder.py          # delete once a real extractor lands
-    <yoursite>.py           # one file per site, snake_case the host
-pyproject.toml               # package metadata + version
-CHANGELOG.md                 # bump version here on each change
-.github/workflows/test.yml   # CI: install + verify plugin loads
-```
+**[Latest release](https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins/releases/latest)** -- **[Changelog](CHANGELOG.md)** -- **[Report a bug](https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins/issues/new)**
 
-The `yt_dlp_plugins/extractor/` path is **mandatory**. yt-dlp's plugin loader specifically searches the namespace `yt_dlp_plugins.extractor.*` across every installed Python package. Files placed anywhere else are not discovered.
+---
 
-## How the auto-install works
+## What it does
 
-The WhyKnot.dev container Dockerfile installs this package into `/opt/yt-dlp-venv` at image build:
+1. Ships extractors in the `yt_dlp_plugins.extractor` namespace -- yt-dlp's plugin loader walks any installed package for that exact path.
+2. Each WhyKnot.dev container installs this package at image build via `uv pip install` from the GitHub tarball URL.
+3. A nightly cron at 01:00 UTC re-runs the same install with `-U` to pull `main`. A push webhook from this repo can trigger the same refresh within seconds.
+4. Update flow snapshots installed versions, runs a smoke (placeholder extractor + `--simulate`), and rolls back to the snapshot on smoke failure. So a broken commit on `main` lives in production for the time between webhook fire and smoke fail (sub-second), and never replaces a working version.
+5. `/health` on each WhyKnot.dev node surfaces `binaries.whyknot_yt_dlp_plugins.{version, last_update, smoke_outcome}` for out-of-band visibility.
 
-```
-uv pip install --no-cache "whyknot-yt-dlp-plugins @ git+https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins.git@main"
-```
+The plugin contract: **only co-residency in the venv is required**. yt-dlp is intentionally NOT a runtime dependency in `pyproject.toml` -- listing it would cause pip/uv to fix the installed yt-dlp version on plugin install, clobbering nightly tracks.
 
-A nightly cron at 01:00 UTC re-runs the same install with `-U` to pull the latest commit on `main`. The container's update script snapshots versions before each upgrade, runs a smoke (`yt-dlp --list-extractors | grep -i whyknot` + a placeholder extract simulation), and rolls back to the snapshot on smoke failure. So a broken commit on `main` lands in production for at most 24 hours before the next nightly cron tries again, and never replaces a working version unless the smoke passes.
+---
 
-The current production version surfaces in `/health`:
-
-```
-"binaries": {
-  "whyknot_yt_dlp_plugins": {
-    "version": "0.1.0",
-    "last_update": "2026-05-05T01:00:13Z",
-    "smoke_outcome": "ok"
-  }
-}
-```
-
-## How to add a new extractor
+## Get a new extractor in production
 
 1. Create `yt_dlp_plugins/extractor/<hostname>.py` (use the host as the file stem, snake_case if needed).
 2. Implement an `InfoExtractor` subclass:
@@ -67,15 +48,23 @@ The current production version surfaces in `/health`:
            return {"id": video_id, "title": title, "url": video_url}
    ```
 
-3. Bump `version` in `pyproject.toml` (semver: patch for fixes, minor for new sites, major for breaking changes).
-4. Add a `CHANGELOG.md` entry.
-5. Push to `main`. CI runs the test workflow; on green, the next nightly cron picks it up on each WhyKnot node.
+3. Bump version via `./build.ps1 -Version <YYYY.M.D.N>` or run `./build.ps1` to auto-derive a date-based version.
+4. Add a `CHANGELOG.md` entry under `## Unreleased`.
+5. Push to `main`. CI runs the test workflow on Python 3.10-3.13; on green, the next nightly cron (or the immediate webhook) lands it on each WhyKnot.dev node.
 
-The yt-dlp Plugin Development wiki has the full extractor API reference: <https://github.com/yt-dlp/yt-dlp/wiki/Plugin-Development>.
+For the full extractor API, see the [yt-dlp Plugin Development wiki](https://github.com/yt-dlp/yt-dlp/wiki/Plugin-Development).
 
-## Versioning + changelog
+---
 
-Every change to the plugin set bumps the version in `pyproject.toml` and adds a `CHANGELOG.md` entry. The version surfaces in the WhyKnot.dev `/health` payload, so an operator can correlate playback regressions against a specific plugin release without ssh'ing into a node.
+## Going deeper
+
+- **Container integration:** the WhyKnot.dev Dockerfile installs this package at image build via `uv pip install "whyknot-yt-dlp-plugins @ https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins/archive/refs/heads/main.tar.gz"`.
+- **Auto-update script:** `whyknot-update-binaries.sh` lives in the WhyKnot.dev repo and does snapshot + upgrade + smoke + rollback for yt-dlp + streamlink + this plugin in one resolver pass.
+- **Webhook receiver:** `POST /api/internal/plugin-update` on each node accepts GitHub webhook pushes (HMAC-verified) and triggers an immediate refresh.
+- **Versioning:** CalVer `YYYY.M.D.N`. Daily build counter, no `-XXXX` suffix (no local-rebuild disambiguation needed for a server-deployed plugin).
+- **Repository structure rules:** files anywhere outside `yt_dlp_plugins/extractor/` are not discovered by yt-dlp. Don't move modules; the namespace is hard-coded in yt-dlp's loader.
+
+---
 
 ## Local development
 
@@ -90,6 +79,8 @@ yt-dlp -v --list-extractors | grep -i whyknot         # confirm plugin discovere
 yt-dlp --simulate --skip-download \
   "https://plugin-test.whyknot.dev/test/sample"        # confirm placeholder extracts
 ```
+
+---
 
 ## License
 

@@ -1,0 +1,164 @@
+name: Release
+
+# Triggered by pushing a tag like v2026.5.5.0 (CalVer; .N = daily build counter
+# starting at 0). build.ps1 validates the shape and fails fast on a malformed
+# tag. The tag (minus the leading "v") drives the Python package version --
+# pyproject.toml's `version = "..."` is rewritten in-place by build.ps1 so the
+# sdist + wheel filenames match the tag.
+#
+# Spirit-port of WKVRCProxy/.github/workflows/release.yml. Differences:
+#   - Python sdist/wheel build (`uv build`) instead of dotnet single-file exe.
+#   - No promotion-PR dance: this repo doesn't have branch protection that
+#     blocks bot pushes to main, so the changelog promotion is committed
+#     directly by the workflow.
+#   - No wiki/Changelog.md mirror (no wiki).
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: changelog-append
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --upgrade build
+
+      - name: Build distribution
+        shell: pwsh
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          # Strip the leading "v" so the version baked into the package matches
+          # the tag. build.ps1 validates the YYYY.M.D.N shape.
+          $version = $env:TAG_NAME -replace '^v', ''
+          ./build.ps1 -Version $version
+
+      - name: Locate artifacts
+        id: art
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel=$(ls dist/*.whl | head -1)
+          sdist=$(ls dist/*.tar.gz | head -1)
+          if [[ -z "$wheel" || -z "$sdist" ]]; then
+            echo "Build did not produce both a wheel and an sdist." >&2
+            exit 1
+          fi
+          wheel_sha=$(sha256sum "$wheel" | awk '{print $1}')
+          sdist_sha=$(sha256sum "$sdist" | awk '{print $1}')
+          echo "wheel=$wheel"     >> "$GITHUB_OUTPUT"
+          echo "sdist=$sdist"     >> "$GITHUB_OUTPUT"
+          echo "wheel_sha=$wheel_sha" >> "$GITHUB_OUTPUT"
+          echo "sdist_sha=$sdist_sha" >> "$GITHUB_OUTPUT"
+          echo "Wheel: $wheel ($wheel_sha)"
+          echo "Sdist: $sdist ($sdist_sha)"
+
+      - name: Promote Unreleased -> tagged section
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/promote_changelog.py --tag "$TAG_NAME"
+
+      - name: Capture release notes
+        id: notes
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          body=$(python3 .github/scripts/promote_changelog.py --tag "$TAG_NAME" --notes-only || true)
+          if [[ -z "$body" ]]; then
+            body="_Maintenance release; see commit log for details._"
+          fi
+          delim="EOF_$(uuidgen)"
+          {
+            echo "body<<$delim"
+            echo "$body"
+            echo "$delim"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+          WHEEL: ${{ steps.art.outputs.wheel }}
+          SDIST: ${{ steps.art.outputs.sdist }}
+          WHEEL_SHA: ${{ steps.art.outputs.wheel_sha }}
+          SDIST_SHA: ${{ steps.art.outputs.sdist_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          notes_file=$(mktemp)
+          cat > "$notes_file" <<EOF
+          ## whyknot-yt-dlp-plugins ${TAG_NAME}
+
+          Install (production WhyKnot.dev nodes pull from main; this artifact is for
+          rollback / manual install):
+
+          \`\`\`
+          pip install "whyknot-yt-dlp-plugins @ https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins/releases/download/${TAG_NAME}/$(basename ${WHEEL})"
+          \`\`\`
+
+          SHA256:
+          - wheel: ${WHEEL_SHA}
+          - sdist: ${SDIST_SHA}
+
+          ---
+
+          ${{ steps.notes.outputs.body }}
+          EOF
+          gh release create "$TAG_NAME" "$WHEEL" "$SDIST" \
+            --title "$TAG_NAME" \
+            --notes-file "$notes_file"
+
+      - name: Commit promoted changelog back to main
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # The tag pointed at a specific commit; we want main to also carry
+          # the promoted CHANGELOG.md so the next push doesn't re-add the same
+          # bullets to "## Unreleased".
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git checkout main
+          git pull --rebase origin main || true
+          # Re-promote on the freshly-pulled main (the tag commit may have been
+          # earlier than HEAD; we want HEAD's Unreleased section promoted).
+          python3 .github/scripts/promote_changelog.py --tag "$TAG_NAME"
+          if git diff --quiet CHANGELOG.md; then
+            echo "Nothing to promote on main."
+          else
+            git add CHANGELOG.md
+            git commit -m "docs(changelog): promote Unreleased -> ${TAG_NAME} [skip changelog]"
+            git push origin main
+          fi

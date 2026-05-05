@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "whyknot-yt-dlp-plugins"
-version = "0.1.1"
+version = "2026.5.5.0"
 description = "Custom yt-dlp extractors for sites WhyKnot.dev resolves"
 readme = "README.md"
 license = "MIT"

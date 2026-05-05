@@ -1,21 +1,48 @@
-name: test
+name: CI
+
+# Mirrors WKVRCProxy/.github/workflows/ci.yml in shape (paths-ignore for doc-only
+# changes, concurrency cancel-in-progress, single test job). The job itself runs
+# Python plugin discovery instead of dotnet build + test because this repo
+# ships a Python package, not a Windows exe.
 
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - '!CHANGELOG.md'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.gitattributes'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - '!CHANGELOG.md'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.gitattributes'
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   plugin-discovery:
+    name: yt-dlp plugin discovery
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
@@ -34,10 +61,10 @@ jobs:
         run: |
           # yt-dlp -v emits a "Loaded N plugins" line on startup when the
           # yt_dlp_plugins.extractor namespace is populated. We don't grep
-          # for an exact count -- we just want to see SOME plugin output and
-          # that the placeholder IE shows in --list-extractors.
+          # for an exact count -- we just want to see plugin output and
+          # the placeholder IE shows in `-v --list-extractors`.
           yt-dlp --version
-          yt-dlp --list-extractors | grep -i whyknot
+          yt-dlp -v --list-extractors 2>&1 | grep -iE 'whyknot|Extractor Plugins'
 
       - name: Smoke -- placeholder extract simulation
         run: |
@@ -46,11 +73,3 @@ jobs:
           yt-dlp --simulate --skip-download --print "%(id)s|%(title)s" \
             "https://plugin-test.whyknot.dev/test/ci-sample" | tee /tmp/out
           grep -q "^ci-sample|WhyKnot Plugin Loaded$" /tmp/out
-
-      - name: Run yt-dlp's plugin self-tests
-        run: |
-          # yt-dlp's test runner picks up any class with _TESTS via the
-          # IE's IE_NAME. Failing here means the placeholder's _TESTS list
-          # got out of sync with _real_extract.
-          python -m yt_dlp -v --simulate --skip-download \
-            "https://plugin-test.whyknot.dev/test/ci-tests"

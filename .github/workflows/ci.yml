@@ -57,19 +57,18 @@ jobs:
           python -m pip install --pre "yt-dlp[default]"
           python -m pip install -e .
 
-      - name: Confirm plugin namespace is loaded
+      - name: Smoke -- plugin discovery + placeholder extract
         run: |
-          # yt-dlp -v emits a "Loaded N plugins" line on startup when the
-          # yt_dlp_plugins.extractor namespace is populated. We don't grep
-          # for an exact count -- we just want to see plugin output and
-          # the placeholder IE shows in `-v --list-extractors`.
+          # `-v --simulate` against the placeholder URL verifies BOTH the
+          # plugin namespace is discovered (verbose output prints
+          # "Extractor Plugins: WhyKnotPluginPlaceholderIE") AND the
+          # extractor's _real_extract returns the expected info_dict.
+          # `--list-extractors` does NOT include external plugin extractors
+          # in some yt-dlp versions, so we don't rely on it.
+          # The placeholder is offline-safe (static info_dict), so this
+          # works in CI without network egress to the test host.
           yt-dlp --version
-          yt-dlp -v --list-extractors 2>&1 | grep -iE 'whyknot|Extractor Plugins'
-
-      - name: Smoke -- placeholder extract simulation
-        run: |
-          # The placeholder _real_extract returns a static info_dict and never
-          # touches the network, so this assertion runs offline-safe in CI.
-          yt-dlp --simulate --skip-download --print "%(id)s|%(title)s" \
-            "https://plugin-test.whyknot.dev/test/ci-sample" | tee /tmp/out
-          grep -q "^ci-sample|WhyKnot Plugin Loaded$" /tmp/out
+          yt-dlp -v --simulate --skip-download --print "%(id)s|%(title)s" \
+            "https://plugin-test.whyknot.dev/test/ci-sample" 2>&1 | tee /tmp/out
+          grep -qE 'Extractor Plugins:.*WhyKnotPluginPlaceholderIE' /tmp/out
+          grep -q '^ci-sample|WhyKnot Plugin Loaded$' /tmp/out

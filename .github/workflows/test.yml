@@ -1,0 +1,56 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  plugin-discovery:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install yt-dlp (nightly) + this plugin
+        run: |
+          python -m pip install --upgrade pip
+          # Match the production install: nightly yt-dlp via --pre, then the
+          # plugin in editable mode so any local change in the PR is exercised.
+          python -m pip install --pre "yt-dlp[default]"
+          python -m pip install -e .
+
+      - name: Confirm plugin namespace is loaded
+        run: |
+          # yt-dlp -v emits a "Loaded N plugins" line on startup when the
+          # yt_dlp_plugins.extractor namespace is populated. We don't grep
+          # for an exact count -- we just want to see SOME plugin output and
+          # that the placeholder IE shows in --list-extractors.
+          yt-dlp --version
+          yt-dlp --list-extractors | grep -i whyknot
+
+      - name: Smoke -- placeholder extract simulation
+        run: |
+          # The placeholder _real_extract returns a static info_dict and never
+          # touches the network, so this assertion runs offline-safe in CI.
+          yt-dlp --simulate --skip-download --print "%(id)s|%(title)s" \
+            "https://plugin-test.whyknot.dev/test/ci-sample" | tee /tmp/out
+          grep -q "^ci-sample|WhyKnot Plugin Loaded$" /tmp/out
+
+      - name: Run yt-dlp's plugin self-tests
+        run: |
+          # yt-dlp's test runner picks up any class with _TESTS via the
+          # IE's IE_NAME. Failing here means the placeholder's _TESTS list
+          # got out of sync with _real_extract.
+          python -m yt_dlp -v --simulate --skip-download \
+            "https://plugin-test.whyknot.dev/test/ci-tests"

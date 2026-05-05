@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "whyknot-yt-dlp-plugins"
+version = "0.1.0"
+description = "Custom yt-dlp extractors for sites WhyKnot.dev resolves"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "WhyKnot" }]
+requires-python = ">=3.9"
+dependencies = ["yt-dlp"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Video",
+]
+
+[project.urls]
+Homepage = "https://whyknot.dev"
+Source = "https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins"
+Changelog = "https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins/blob/main/CHANGELOG.md"
+
+# yt-dlp's plugin loader walks `yt_dlp_plugins/extractor/` and `yt_dlp_plugins/postprocessor/`
+# under any installed package. The `tool.hatch.build.targets.wheel` block below makes
+# Hatchling include those directories in the built wheel even though they live at the
+# repository root rather than inside a single package directory. Without this Hatchling
+# guesses a single top-level package and the plugin namespace gets shipped empty.
+[tool.hatch.build.targets.wheel]
+packages = ["yt_dlp_plugins"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/yt_dlp_plugins", "/README.md", "/CHANGELOG.md", "/LICENSE", "/pyproject.toml"]

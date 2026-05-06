@@ -1,17 +1,19 @@
 name: Release
 
-# Triggered by pushing a tag like v2026.5.5.0 (CalVer; .N = daily build counter
+# Triggered by pushing a tag like v2026.5.6.0 (CalVer; .N = daily build counter
 # starting at 0). build.ps1 validates the shape and fails fast on a malformed
 # tag. The tag (minus the leading "v") drives the Python package version --
 # pyproject.toml's `version = "..."` is rewritten in-place by build.ps1 so the
 # sdist + wheel filenames match the tag.
 #
 # Spirit-port of WKVRCProxy/.github/workflows/release.yml. Differences:
-#   - Python sdist/wheel build (`uv build`) instead of dotnet single-file exe.
-#   - No promotion-PR dance: this repo doesn't have branch protection that
-#     blocks bot pushes to main, so the changelog promotion is committed
-#     directly by the workflow.
-#   - No wiki/Changelog.md mirror (no wiki).
+#   - Python sdist + wheel artifacts (uv build) instead of dotnet single-file exe.
+#   - No promotion-PR dance: no branch protection that blocks bot pushes to main
+#     yet on this repo, but the changelog promotion still goes through the
+#     verified-bot-commits createCommitOnBranch path so it lands signed.
+#   - generate_release_notes.py composes the body from per-template sections,
+#     auto-changelog slice, and a wheel+sdist integrity table; release body is
+#     never hand-written.
 
 on:
   push:
@@ -21,6 +23,9 @@ on:
 permissions:
   contents: write
 
+# Share a concurrency group with changelog-append so the appender can't run
+# during a release publish and add entries to main's Unreleased that the
+# release itself doesn't contain.
 concurrency:
   group: changelog-append
   cancel-in-progress: false
@@ -43,10 +48,28 @@ jobs:
         with:
           python-version: '3.13'
 
+      - name: Set up PowerShell (for build.ps1)
+        # Ubuntu runners ship pwsh by default but be explicit so a future
+        # runner-image change does not break the release silently.
+        run: pwsh --version
+
       - name: Install build tooling
         run: |
           python -m pip install --upgrade pip
           python -m pip install --upgrade build
+
+      - name: Promote Unreleased -> tagged section
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/promote_changelog.py --tag "$TAG_NAME"
+          # Stash the promoted file so we can re-apply it on main after the
+          # release. Doing it now (before build.ps1 mutates pyproject.toml)
+          # means the bytes pushed back to main are exactly what shipped.
+          mkdir -p .changelog-stash
+          cp CHANGELOG.md .changelog-stash/CHANGELOG.md
 
       - name: Build distribution
         shell: pwsh
@@ -71,78 +94,173 @@ jobs:
           fi
           wheel_sha=$(sha256sum "$wheel" | awk '{print $1}')
           sdist_sha=$(sha256sum "$sdist" | awk '{print $1}')
-          echo "wheel=$wheel"     >> "$GITHUB_OUTPUT"
-          echo "sdist=$sdist"     >> "$GITHUB_OUTPUT"
-          echo "wheel_sha=$wheel_sha" >> "$GITHUB_OUTPUT"
-          echo "sdist_sha=$sdist_sha" >> "$GITHUB_OUTPUT"
-          echo "Wheel: $wheel ($wheel_sha)"
-          echo "Sdist: $sdist ($sdist_sha)"
-
-      - name: Promote Unreleased -> tagged section
-        shell: bash
-        env:
-          TAG_NAME: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          python3 .github/scripts/promote_changelog.py --tag "$TAG_NAME"
-
-      - name: Capture release notes
-        id: notes
-        shell: bash
-        env:
-          TAG_NAME: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          body=$(python3 .github/scripts/promote_changelog.py --tag "$TAG_NAME" --notes-only || true)
-          if [[ -z "$body" ]]; then
-            body="_Maintenance release; see commit log for details._"
-          fi
-          delim="EOF_$(uuidgen)"
+          wheel_size=$(stat -c %s "$wheel")
+          sdist_size=$(stat -c %s "$sdist")
           {
-            echo "body<<$delim"
-            echo "$body"
-            echo "$delim"
+            echo "wheel=$wheel"
+            echo "sdist=$sdist"
+            echo "wheel_sha=$wheel_sha"
+            echo "sdist_sha=$sdist_sha"
+            echo "wheel_size=$wheel_size"
+            echo "sdist_size=$sdist_size"
           } >> "$GITHUB_OUTPUT"
+          echo "Wheel: $wheel ($wheel_size bytes, sha256 $wheel_sha)"
+          echo "Sdist: $sdist ($sdist_size bytes, sha256 $sdist_sha)"
+
+      - name: Generate release body
+        id: body
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          # gh release list is used by the prev-tag resolver's subject-match
+          # fallback. Without it the resolver silently falls through to the
+          # root walk, which produces a giant slice on rebased histories.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          body_file="$RUNNER_TEMP/release-body.md"
+          # Compose the full release body: title + auto-changelog slice +
+          # File integrity (wheel + sdist) + four templated evergreen sections
+          # (More / Install / Local development / What you need to do) +
+          # optional .github/release-extras/<tag>.md. See the script for
+          # filtering rules, token substitution, and scrub gates.
+          python3 .github/scripts/generate_release_notes.py \
+            --wheel      "${{ steps.art.outputs.wheel }}" \
+            --wheel-sha  "${{ steps.art.outputs.wheel_sha }}" \
+            --wheel-size "${{ steps.art.outputs.wheel_size }}" \
+            --sdist      "${{ steps.art.outputs.sdist }}" \
+            --sdist-sha  "${{ steps.art.outputs.sdist_sha }}" \
+            --sdist-size "${{ steps.art.outputs.sdist_size }}" \
+            > "$body_file"
+          if [[ ! -s "$body_file" ]]; then
+            echo "::error::generate_release_notes.py produced an empty body. Inspect the workflow log."
+            exit 1
+          fi
+          echo "body_file=$body_file" >> "$GITHUB_OUTPUT"
+          echo "Composed body: $(wc -c < "$body_file") chars"
 
       - name: Create GitHub release
+        id: publish
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ github.ref_name }}
           WHEEL: ${{ steps.art.outputs.wheel }}
           SDIST: ${{ steps.art.outputs.sdist }}
-          WHEEL_SHA: ${{ steps.art.outputs.wheel_sha }}
-          SDIST_SHA: ${{ steps.art.outputs.sdist_sha }}
-        shell: bash
         run: |
           set -euo pipefail
-          notes_file=$(mktemp)
-          cat > "$notes_file" <<EOF
-          ## whyknot-yt-dlp-plugins ${TAG_NAME}
-
-          Install (production WhyKnot.dev nodes pull from main; this artifact is for
-          rollback / manual install):
-
-          \`\`\`
-          pip install "whyknot-yt-dlp-plugins @ https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins/releases/download/${TAG_NAME}/$(basename ${WHEEL})"
-          \`\`\`
-
-          SHA256:
-          - wheel: ${WHEEL_SHA}
-          - sdist: ${SDIST_SHA}
-
-          ---
-
-          ${{ steps.notes.outputs.body }}
-          EOF
           gh release create "$TAG_NAME" "$WHEEL" "$SDIST" \
             --title "$TAG_NAME" \
-            --notes-file "$notes_file"
+            --notes-file "${{ steps.body.outputs.body_file }}"
 
-      # NOTE: deliberately not committing the promoted CHANGELOG.md back to
-       # main. The double-promote on tag created duplicate empty headings
-       # in v2026.5.5.0's run. The release artifact (sdist/wheel) attached
-       # to the GH release is the durable record; main's "## Unreleased"
-       # section gets new bullets via the next changelog-append run, and
-       # the next tag promote handles the heading rename. If we want main's
-       # CHANGELOG to track tagged sections in real time, redo this step
-       # with a guard ("only promote if Unreleased contains real bullets").
+      - name: Verify published release body matches input
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+          BODY_FILE: ${{ steps.body.outputs.body_file }}
+        run: |
+          set -euo pipefail
+          expected="$(cat "$BODY_FILE" | sed -e 's/[[:space:]]*$//' )"
+          actual="$(gh release view "$TAG_NAME" --json body --jq '.body' | sed -e 's/[[:space:]]*$//')"
+          if [[ "$expected" == "$actual" ]]; then
+            echo "Published release body matches input ($(printf %s "$expected" | wc -c) chars)."
+            exit 0
+          fi
+          # Mismatch is rare but real -- GitHub occasionally normalises trailing
+          # whitespace or rejects exotic characters. Auto-correct via gh release
+          # edit, then re-verify.
+          echo "::warning::Published body differs from input. Auto-correcting via gh release edit."
+          gh release edit "$TAG_NAME" --notes-file "$BODY_FILE"
+          recheck="$(gh release view "$TAG_NAME" --json body --jq '.body' | sed -e 's/[[:space:]]*$//')"
+          if [[ "$recheck" != "$expected" ]]; then
+            actual_path="$RUNNER_TEMP/release-body-actual.md"
+            printf %s "$recheck" > "$actual_path"
+            echo "::error::Release body still differs after auto-correct. Compare $BODY_FILE vs $actual_path in runner artifacts."
+            exit 1
+          fi
+          echo "Auto-correct succeeded; body now matches input."
+
+      - name: Smoke-check published artifact loads under yt-dlp
+        # Pull the published wheel back from the release, install in a clean
+        # venv alongside yt-dlp nightly, and verify the plugin namespace is
+        # discovered. Catches a packaging regression that would silently let
+        # production nodes update to a wheel that ships without extractors.
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          smoke_dir="$RUNNER_TEMP/smoke"
+          mkdir -p "$smoke_dir"
+          gh release download "$TAG_NAME" --pattern '*.whl' --dir "$smoke_dir"
+          wheel="$(ls "$smoke_dir"/*.whl | head -1)"
+          python3 -m venv "$smoke_dir/venv"
+          # shellcheck disable=SC1091
+          source "$smoke_dir/venv/bin/activate"
+          pip install --upgrade pip
+          pip install --pre 'yt-dlp[default]'
+          pip install "$wheel"
+          yt-dlp --version
+          # `-v --simulate` against the placeholder URL verifies plugin
+          # discovery: the verbose log prints "Extractor Plugins: ...".
+          yt-dlp -v --simulate --skip-download --print '%(id)s|%(title)s' \
+            'https://plugin-test.whyknot.dev/test/release-smoke' 2>&1 | tee "$smoke_dir/out"
+          grep -qE 'Extractor Plugins:.*WhyKnotPluginPlaceholderIE' "$smoke_dir/out"
+
+      - name: Commit promoted CHANGELOG.md back to main (verified)
+        # Same createCommitOnBranch pattern as changelog-append.yml so the
+        # promotion commit lands signed and clears the protected-branch
+        # signature rule (when one is added).
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Replay the stashed promoted file so the bytes on main match what
+          # the release shipped (build.ps1 didn't touch CHANGELOG.md so this
+          # is largely defensive).
+          cp .changelog-stash/CHANGELOG.md CHANGELOG.md
+          # Compare against main's tip (we are on a tag, not a branch).
+          main_oid=$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')
+          main_blob=$(gh api "repos/$GITHUB_REPOSITORY/contents/CHANGELOG.md?ref=$main_oid" --jq '.sha' 2>/dev/null || echo "")
+          local_blob=$(git hash-object CHANGELOG.md)
+          if [[ "$main_blob" == "$local_blob" ]]; then
+            echo "main already in promoted state -- nothing to commit."
+            exit 0
+          fi
+          changelog_b64=$(base64 -w 0 CHANGELOG.md)
+          headline="docs(changelog): promote Unreleased -> ${TAG_NAME} [skip changelog]"
+          body=$(printf '%s\n%s' \
+            "Promotion commit by .github/workflows/release.yml after publishing ${TAG_NAME}." \
+            'Mirrors the CHANGELOG.md that shipped in the release artifact back to main.')
+          payload=$(jq -n \
+            --arg repo "$GITHUB_REPOSITORY" \
+            --arg branch "main" \
+            --arg headline "$headline" \
+            --arg body "$body" \
+            --arg oid "$main_oid" \
+            --arg changelog "$changelog_b64" \
+            '{
+              query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid url } } }",
+              variables: {
+                input: {
+                  branch: { repositoryNameWithOwner: $repo, branchName: $branch },
+                  message: { headline: $headline, body: $body },
+                  fileChanges: { additions: [ { path: "CHANGELOG.md", contents: $changelog } ] },
+                  expectedHeadOid: $oid
+                }
+              }
+            }')
+          response=$(printf '%s' "$payload" | gh api graphql --input -)
+          echo "$response" | jq .
+          if echo "$response" | jq -e '.errors // empty' >/dev/null; then
+            echo "::warning::createCommitOnBranch returned GraphQL errors; promotion not committed back to main. The release is still published; run the workflow manually or amend on next push."
+            exit 0
+          fi
+          new_oid=$(echo "$response" | jq -r '.data.createCommitOnBranch.commit.oid')
+          echo "Promotion commit: $new_oid"

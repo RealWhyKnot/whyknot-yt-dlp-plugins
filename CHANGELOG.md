@@ -8,7 +8,11 @@ release versioning where N is the daily build counter starting at 0).
 
 ## Unreleased
 
+_No notable changes since the last release._
 
+---
+
+## [v2026.5.6.0](https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins/releases/tag/v2026.5.6.0) - 2026-05-06
 ### Added
 - **tubi:** Override extractor that exposes per-resource audio renditions as language-tagged formats. Multi-language titles like `the-housemaid` are now selectable with `-f 'bv*+ba[language=ko]'`. Single-language titles inherit the resource-level language. Older `hlsv3` muxed catalog continues to work. Test corpus in `tests/tubi_corpus.md`.
 - **tubi:** Override extractor with per-language audio tagging (fa93053)

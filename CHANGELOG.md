@@ -8,19 +8,18 @@ release versioning where N is the daily build counter starting at 0).
 
 ## Unreleased
 
-### Added
 
+### Added
 - **tubi:** Override extractor that exposes per-resource audio renditions as language-tagged formats. Multi-language titles like `the-housemaid` are now selectable with `-f 'bv*+ba[language=ko]'`. Single-language titles inherit the resource-level language. Older `hlsv3` muxed catalog continues to work. Test corpus in `tests/tubi_corpus.md`.
+- **tubi:** Override extractor with per-language audio tagging (fa93053)
 
 ### Changed
-
 - **release:** Release body composer (`generate_release_notes.py`) replaces the inline-string release notes in `release.yml`. Composes title + auto-changelog slice + wheel/sdist integrity table + four templated sections + optional `release-extras/<tag>.md`. Same scrub gates (ASCII normalisation, voice + internal-vocabulary grep) as WKVRCProxy.
 - **release:** Smoke step downloads the published wheel and verifies plugin discovery in a clean venv against the placeholder URL.
 - **changelog-append:** Bot-authored append commit now goes through the GraphQL `createCommitOnBranch` mutation so the commit is signed server-side and lands `verified=true`. Required once branch protection requires signatures on `main`.
 - **release:** Promotion of `## Unreleased` -> tagged section is now committed back to `main` via the same `createCommitOnBranch` path.
 
 ### Fixed
-
 - **ci:** Use `-v --simulate` for plugin discovery (`--list-extractors` omits external plugin IEs) (b1438fc)
 
 ---

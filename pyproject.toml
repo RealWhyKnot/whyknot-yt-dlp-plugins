@@ -7,7 +7,7 @@ name = "whyknot-yt-dlp-plugins"
 version = "2026.5.5.0"
 description = "Custom yt-dlp extractors for sites WhyKnot.dev resolves"
 readme = "README.md"
-license = "MIT"
+license = "GPL-3.0-or-later"
 authors = [{ name = "WhyKnot" }]
 requires-python = ">=3.9"
 # yt-dlp is intentionally NOT listed as a runtime dependency. The plugin is a
@@ -22,7 +22,7 @@ dependencies = []
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: End Users/Desktop",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Topic :: Multimedia :: Video",

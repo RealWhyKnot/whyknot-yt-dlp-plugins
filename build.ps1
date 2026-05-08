@@ -53,7 +53,8 @@ Write-Host "Building Version: $FullVersion" -ForegroundColor Magenta
 $Pyproject = Join-Path $PSScriptRoot "pyproject.toml"
 $content = Get-Content $Pyproject -Raw
 $content = $content -replace '(?m)^version = "[^"]+"', "version = `"$FullVersion`""
-Set-Content -Path $Pyproject -Value $content -NoNewline -Encoding utf8
+$Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($Pyproject, $content, $Utf8NoBom)
 
 # --- Build sdist + wheel ---
 if (-not $SkipBuild) {

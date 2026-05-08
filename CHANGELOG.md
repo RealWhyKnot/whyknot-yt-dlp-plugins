@@ -8,7 +8,14 @@ release versioning where N is the daily build counter starting at 0).
 
 ## Unreleased
 
-_No notable changes since the last release._
+### Removed
+- **tubi:** Removed the Tubi override extractor and its corpus. The package is now intentionally a placeholder with only the offline-safe plugin discovery sentinel.
+
+### Changed
+- **package:** Bumped version to `2026.5.8.0` so production update paths can observe a new package version.
+
+### Fixed
+- **build:** Write `pyproject.toml` as UTF-8 without BOM during local Windows PowerShell builds so Hatchling can parse it.
 
 ---
 

@@ -1,17 +1,17 @@
-# Placeholder extractor that exists ONLY to prove the plugin namespace is
-# discovered + loaded by yt-dlp at runtime. Matches a hostname under a
-# WhyKnot-controlled subdomain that does not host real content
-# (`plugin-test.whyknot.dev/test/<id>`), so it never fights with a real
-# extractor and never sees real traffic.
+# Placeholder extractor that exists to prove the plugin namespace is
+# discovered + loaded by yt-dlp at runtime while this repo has no real-site
+# extractors. Matches a hostname under a WhyKnot-controlled subdomain that
+# does not host real content (`plugin-test.whyknot.dev/test/<id>`), so it
+# never fights with a real extractor and never sees real traffic.
 #
 # Smoke check used by the container's auto-update cron:
 #   yt-dlp --simulate --skip-download \
 #     "https://plugin-test.whyknot.dev/test/sample"
 # expected: title="WhyKnot Plugin Loaded", id="sample".
 #
-# Delete this file once the first real extractor lands; it carries no
-# value beyond bootstrap-time verification and the smoke can switch to the
-# real extractor's _TESTS at that point.
+# Keep this file while the repository is a placeholder. If real extractors are
+# added later, either keep this sentinel for server update smoke or replace the
+# smoke target with an equally offline-safe extractor test.
 
 from yt_dlp.extractor.common import InfoExtractor
 

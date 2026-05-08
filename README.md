@@ -1,10 +1,10 @@
 # whyknot-yt-dlp-plugins
 
-**Custom yt-dlp extractors for sites WhyKnot.dev resolves.**
+**Placeholder yt-dlp plugin package for WhyKnot.dev.**
 
-When a site isn't natively supported by yt-dlp but [WhyKnot.dev](https://whyknot.dev) needs to play it through VRChat, the extractor lives here. Production WhyKnot.dev nodes pick up new commits within seconds via a push webhook (cron-fallback within 24h), validate via smoke, and roll back on failure.
+This repository currently ships no real-site extractor overrides. It exists so [WhyKnot.dev](https://whyknot.dev) can keep the plugin install, update, release, and smoke-test path ready for the next extractor we actually need. Production WhyKnot.dev nodes pick up new commits within seconds via a push webhook (cron-fallback within 24h), validate via smoke, and roll back on failure.
 
-> **Status: alpha.** Plugin discovery + auto-update plumbing are stable; the extractor catalogue is bootstrap-thin until real sites land.
+> **Status: placeholder.** Plugin discovery + auto-update plumbing are stable; the extractor catalogue intentionally contains only the WhyKnot smoke-test sentinel.
 
 **[Latest release](https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins/releases/latest)** -- **[Changelog](CHANGELOG.md)** -- **[Report a bug](https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins/issues/new)**
 
@@ -12,11 +12,15 @@ When a site isn't natively supported by yt-dlp but [WhyKnot.dev](https://whyknot
 
 ## What it does
 
-1. Ships extractors in the `yt_dlp_plugins.extractor` namespace -- yt-dlp's plugin loader walks any installed package for that exact path.
+1. Ships the `yt_dlp_plugins.extractor` namespace -- yt-dlp's plugin loader walks any installed package for that exact path.
 2. Each WhyKnot.dev container installs this package at image build via `uv pip install` from the GitHub tarball URL.
 3. A nightly cron at 01:00 UTC re-runs the same install with `-U` to pull `main`. A push webhook from this repo can trigger the same refresh within seconds.
 4. Update flow snapshots installed versions, runs a smoke (placeholder extractor + `--simulate`), and rolls back to the snapshot on smoke failure. So a broken commit on `main` lives in production for the time between webhook fire and smoke fail (sub-second), and never replaces a working version.
 5. `/health` on each WhyKnot.dev node surfaces `binaries.whyknot_yt_dlp_plugins.{version, last_update, smoke_outcome}` for out-of-band visibility.
+
+Current shipped extractor modules:
+
+- `placeholder.py`: offline-safe `plugin-test.whyknot.dev` sentinel used by CI, release smoke, and server update smoke.
 
 The plugin contract: **only co-residency in the venv is required**. yt-dlp is intentionally NOT a runtime dependency in `pyproject.toml` -- listing it would cause pip/uv to fix the installed yt-dlp version on plugin install, clobbering nightly tracks.
 

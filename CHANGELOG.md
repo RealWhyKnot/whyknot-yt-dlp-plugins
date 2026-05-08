@@ -8,6 +8,11 @@ release versioning where N is the daily build counter starting at 0).
 
 ## Unreleased
 
+_No notable changes since the last release._
+
+---
+
+## [v2026.5.8.0](https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins/releases/tag/v2026.5.8.0) - 2026-05-08
 ### Removed
 - **tubi:** Removed the Tubi override extractor and its corpus. The package is now intentionally a placeholder with only the offline-safe plugin discovery sentinel.
 

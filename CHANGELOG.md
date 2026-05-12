@@ -8,7 +8,9 @@ release versioning where N is the daily build counter starting at 0).
 
 ## Unreleased
 
-_No notable changes since the last release._
+
+### Added
+- **nepu:** Route fetches through FlareSolverr when WHYKNOT_FLARESOLVERR_URL is set (c536383)
 
 ---
 

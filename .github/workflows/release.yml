@@ -77,9 +77,18 @@ jobs:
           TAG_NAME: ${{ github.ref_name }}
         run: |
           # Strip the leading "v" so the version baked into the package matches
-          # the tag. build.ps1 validates the YYYY.M.D.N shape.
+          # the tag. build.ps1 validates the YYYY.M.D.N shape and rewrites
+          # pyproject.toml in-place with the resolved version.
           $version = $env:TAG_NAME -replace '^v', ''
           ./build.ps1 -Version $version
+          # Stash the bumped pyproject.toml so the post-publish step can
+          # commit the version bump back to main. Without this, the tarball
+          # at https://github.com/.../archive/refs/heads/main.tar.gz keeps
+          # the prior pyproject version, and downstream `pip install -U
+          # "whyknot-yt-dlp-plugins @ <tarball>"` skips the upgrade because
+          # the resolver sees no version change.
+          New-Item -ItemType Directory -Force .pyproject-stash | Out-Null
+          Copy-Item pyproject.toml .pyproject-stash/pyproject.toml -Force
 
       - name: Locate artifacts
         id: art
@@ -210,10 +219,16 @@ jobs:
             'https://plugin-test.whyknot.dev/test/release-smoke' 2>&1 | tee "$smoke_dir/out"
           grep -qE 'Extractor Plugins:.*WhyKnotPluginPlaceholderIE' "$smoke_dir/out"
 
-      - name: Commit promoted CHANGELOG.md back to main (verified)
+      - name: Commit promoted CHANGELOG.md + pyproject.toml back to main (verified)
         # Same createCommitOnBranch pattern as changelog-append.yml so the
         # promotion commit lands signed and clears the protected-branch
-        # signature rule (when one is added).
+        # signature rule (when one is added). Mirrors two files back to main:
+        #   - CHANGELOG.md: the Unreleased->tag promotion done in this run.
+        #   - pyproject.toml: the version bump done by build.ps1, so main's
+        #     tarball (heads/main.tar.gz) actually carries the new version
+        #     and downstream `pip install -U` sees an upgrade. Without this,
+        #     production nodes installing from the tarball skip the upgrade
+        #     and stay on the prior version.
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -221,41 +236,105 @@ jobs:
           TAG_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          # Replay the stashed promoted file so the bytes on main match what
-          # the release shipped (build.ps1 didn't touch CHANGELOG.md so this
-          # is largely defensive).
+          # Replay the stashed bytes so what we commit back exactly matches
+          # what the release shipped.
           cp .changelog-stash/CHANGELOG.md CHANGELOG.md
-          # Compare against main's tip (we are on a tag, not a branch).
+          cp .pyproject-stash/pyproject.toml pyproject.toml
+          # Compare each file against main's tip (we are on a tag, not a branch).
           main_oid=$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')
-          main_blob=$(gh api "repos/$GITHUB_REPOSITORY/contents/CHANGELOG.md?ref=$main_oid" --jq '.sha' 2>/dev/null || echo "")
-          local_blob=$(git hash-object CHANGELOG.md)
-          if [[ "$main_blob" == "$local_blob" ]]; then
+          main_changelog_blob=$(gh api "repos/$GITHUB_REPOSITORY/contents/CHANGELOG.md?ref=$main_oid" --jq '.sha' 2>/dev/null || echo "")
+          main_pyproject_blob=$(gh api "repos/$GITHUB_REPOSITORY/contents/pyproject.toml?ref=$main_oid" --jq '.sha' 2>/dev/null || echo "")
+          local_changelog_blob=$(git hash-object CHANGELOG.md)
+          local_pyproject_blob=$(git hash-object pyproject.toml)
+
+          additions=""
+          if [[ "$main_changelog_blob" != "$local_changelog_blob" ]]; then
+            additions="$additions CHANGELOG.md"
+          fi
+          if [[ "$main_pyproject_blob" != "$local_pyproject_blob" ]]; then
+            additions="$additions pyproject.toml"
+          fi
+          if [[ -z "$additions" ]]; then
             echo "main already in promoted state -- nothing to commit."
             exit 0
           fi
+          echo "Files to commit:$additions"
+
           changelog_b64=$(base64 -w 0 CHANGELOG.md)
+          pyproject_b64=$(base64 -w 0 pyproject.toml)
           headline="docs(changelog): promote Unreleased -> ${TAG_NAME} [skip changelog]"
-          body=$(printf '%s\n%s' \
+          body=$(printf '%s\n%s\n%s' \
             "Promotion commit by .github/workflows/release.yml after publishing ${TAG_NAME}." \
-            'Mirrors the CHANGELOG.md that shipped in the release artifact back to main.')
-          payload=$(jq -n \
-            --arg repo "$GITHUB_REPOSITORY" \
-            --arg branch "main" \
-            --arg headline "$headline" \
-            --arg body "$body" \
-            --arg oid "$main_oid" \
-            --arg changelog "$changelog_b64" \
-            '{
-              query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid url } } }",
-              variables: {
-                input: {
-                  branch: { repositoryNameWithOwner: $repo, branchName: $branch },
-                  message: { headline: $headline, body: $body },
-                  fileChanges: { additions: [ { path: "CHANGELOG.md", contents: $changelog } ] },
-                  expectedHeadOid: $oid
+            'Mirrors the CHANGELOG.md that shipped in the release artifact back to main.' \
+            'Also bumps pyproject.toml version so the heads/main.tar.gz install path picks up the new release.')
+
+          # Compose fileChanges.additions dynamically based on which files
+          # actually differ from main. Two cases (changelog only / both)
+          # because pyproject.toml is the rarer case (only mutated by builds
+          # that change the version, i.e. every tagged release).
+          if [[ "$main_changelog_blob" != "$local_changelog_blob" && "$main_pyproject_blob" != "$local_pyproject_blob" ]]; then
+            payload=$(jq -n \
+              --arg repo "$GITHUB_REPOSITORY" \
+              --arg branch "main" \
+              --arg headline "$headline" \
+              --arg body "$body" \
+              --arg oid "$main_oid" \
+              --arg changelog "$changelog_b64" \
+              --arg pyproject "$pyproject_b64" \
+              '{
+                query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid url } } }",
+                variables: {
+                  input: {
+                    branch: { repositoryNameWithOwner: $repo, branchName: $branch },
+                    message: { headline: $headline, body: $body },
+                    fileChanges: { additions: [
+                      { path: "CHANGELOG.md", contents: $changelog },
+                      { path: "pyproject.toml", contents: $pyproject }
+                    ] },
+                    expectedHeadOid: $oid
+                  }
                 }
-              }
-            }')
+              }')
+          elif [[ "$main_changelog_blob" != "$local_changelog_blob" ]]; then
+            payload=$(jq -n \
+              --arg repo "$GITHUB_REPOSITORY" \
+              --arg branch "main" \
+              --arg headline "$headline" \
+              --arg body "$body" \
+              --arg oid "$main_oid" \
+              --arg changelog "$changelog_b64" \
+              '{
+                query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid url } } }",
+                variables: {
+                  input: {
+                    branch: { repositoryNameWithOwner: $repo, branchName: $branch },
+                    message: { headline: $headline, body: $body },
+                    fileChanges: { additions: [ { path: "CHANGELOG.md", contents: $changelog } ] },
+                    expectedHeadOid: $oid
+                  }
+                }
+              }')
+          else
+            payload=$(jq -n \
+              --arg repo "$GITHUB_REPOSITORY" \
+              --arg branch "main" \
+              --arg headline "$headline" \
+              --arg body "$body" \
+              --arg oid "$main_oid" \
+              --arg pyproject "$pyproject_b64" \
+              '{
+                query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid url } } }",
+                variables: {
+                  input: {
+                    branch: { repositoryNameWithOwner: $repo, branchName: $branch },
+                    message: { headline: $headline, body: $body },
+                    fileChanges: { additions: [ { path: "pyproject.toml", contents: $pyproject } ] },
+                    expectedHeadOid: $oid
+                  }
+                }
+              }')
+          fi
+
           response=$(printf '%s' "$payload" | gh api graphql --input -)
           echo "$response" | jq .
           if echo "$response" | jq -e '.errors // empty' >/dev/null; then

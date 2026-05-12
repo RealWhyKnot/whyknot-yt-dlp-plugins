@@ -8,13 +8,13 @@ release versioning where N is the daily build counter starting at 0).
 
 ## Unreleased
 
+_No notable changes since the last release._
 
+---
 
+## [v2026.5.12.0](https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins/releases/tag/v2026.5.12.0) - 2026-05-12
 ### Added
 - **nepu:** Add extractor for nepu.to movies and show episodes (174a518)
-
-### Changed
-- **deps:** Bump actions/setup-python from 5 to 6 (#2) (76e2ead)
 
 ---
 

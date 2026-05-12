@@ -5,6 +5,7 @@ Custom yt-dlp extractors for sites resolved by WhyKnot.dev.
 ## Start here
 
 - [Project README](https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins#readme)
+- [Supported sites](Supported-sites)
 - [Changelog](Changelog)
 - [Issues](https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins/issues)
 - [Releases](https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins/releases)

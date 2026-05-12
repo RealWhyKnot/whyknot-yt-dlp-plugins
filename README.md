@@ -1,10 +1,6 @@
 # whyknot-yt-dlp-plugins
 
-**Placeholder yt-dlp plugin package for WhyKnot.dev.**
-
-This repository currently ships no real-site extractor overrides. It exists so [WhyKnot.dev](https://whyknot.dev) can keep the plugin install, update, release, and smoke-test path ready for the next extractor we actually need. Production WhyKnot.dev nodes pick up new commits within seconds via a push webhook (cron-fallback within 24h), validate via smoke, and roll back on failure.
-
-> **Status: placeholder.** Plugin discovery + auto-update plumbing are stable; the extractor catalogue intentionally contains only the WhyKnot smoke-test sentinel.
+Custom yt-dlp extractors for sites resolved by [WhyKnot.dev](https://whyknot.dev). Production WhyKnot.dev nodes pick up new commits within seconds via a push webhook (cron-fallback within 24h), validate via smoke, and roll back on failure.
 
 **[Latest release](https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins/releases/latest)** -- **[Changelog](CHANGELOG.md)** -- **[Report a bug](https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins/issues/new)**
 
@@ -20,7 +16,10 @@ This repository currently ships no real-site extractor overrides. It exists so [
 
 Current shipped extractor modules:
 
-- `placeholder.py`: offline-safe `plugin-test.whyknot.dev` sentinel used by CI, release smoke, and server update smoke.
+| Module | Site | Classes | Notes |
+| --- | --- | --- | --- |
+| `placeholder.py` | `plugin-test.whyknot.dev` | `WhyKnotPluginPlaceholderIE` | Offline-safe sentinel used by CI, release smoke, and server update smoke. |
+| `nepu.py` | `nepu.to` | `NepuMovieIE`, `NepuEpisodeIE` | HLS pass-through. Site is fronted by a Cloudflare bot challenge -- a plain HTTP GET returns 403, so fetches need cookies from a browser session, a FlareSolverr-style solver, or a co-located browser. The parser is correct against the rendered HTML once it is available. |
 
 The plugin contract: **only co-residency in the venv is required**. yt-dlp is intentionally NOT a runtime dependency in `pyproject.toml` -- listing it would cause pip/uv to fix the installed yt-dlp version on plugin install, clobbering nightly tracks.
 
@@ -78,11 +77,14 @@ cd whyknot-yt-dlp-plugins
 python -m venv .venv && source .venv/bin/activate    # or .venv\Scripts\activate on Windows
 pip install --upgrade pip
 pip install --pre "yt-dlp[default]"
-pip install -e .
+pip install -e ".[test]"                              # pulls pytest + yt-dlp for the test suite
+pytest tests/                                          # offline regex + parser tests
 yt-dlp -v --list-extractors | grep -i whyknot         # confirm plugin discovered
 yt-dlp --simulate --skip-download \
   "https://plugin-test.whyknot.dev/test/sample"        # confirm placeholder extracts
 ```
+
+The `[test]` extra is an optional-dependency group, so `pip install -e .` (without `[test]`) still works for plain plugin installs. Runtime `dependencies` in `pyproject.toml` stays empty so production installs don't clobber the nightly yt-dlp track.
 
 ---
 

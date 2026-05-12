@@ -9,15 +9,21 @@
 # IMPORTANT: nepu.to is fronted by a Cloudflare bot-mitigation challenge.
 # A plain HTTP GET from yt-dlp (even with `--impersonate chrome` via
 # curl-cffi) returns 403; the response body is the challenge page, not
-# the real page, so the m3u8 regex won't match. Production resolution
-# therefore needs one of:
+# the real page, so the m3u8 regex won't match. The challenge clears
+# automatically in a real browser within ~10-15s without user input, so
+# any headless-browser bypass that handles auto-passing challenges is
+# enough -- no Turnstile interactive solving needed.
 #
-#   - `--cookies-from-browser <browser>` so a `cf_clearance` cookie from
-#     a browser session that already cleared the challenge is presented.
-#   - A FlareSolverr-style service that runs headless Chromium, solves
-#     the challenge, and returns the rendered HTML / cookies.
-#   - A real browser session co-located with the resolver (e.g. a
-#     persistent Chromium container on the WhyKnot.dev node).
+# In production, set `WHYKNOT_FLARESOLVERR_URL` to the base URL of a
+# reachable FlareSolverr instance (e.g. `http://flaresolverr:8191` in a
+# container-network setup). When the env var is set, the extractor
+# routes the page fetch through FlareSolverr's `POST /v1` endpoint with
+# `cmd=request.get`, which returns the rendered HTML after the challenge
+# has been cleared. When it is unset, the extractor falls back to a
+# plain `_download_webpage` -- the parser logic is correct against the
+# rendered HTML either way, so a manual `--cookies-from-browser` or
+# `--cookies` flow on a workstation that already cleared the challenge
+# also works.
 #
 # The parsing logic in this file is correct against the actual rendered
 # HTML -- it's the fetch step upstream of it that requires the bypass.
@@ -44,6 +50,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import re
 
 from yt_dlp.extractor.common import InfoExtractor
@@ -53,6 +61,14 @@ from yt_dlp.utils import (
     parse_duration,
     unified_strdate,
 )
+
+# Env var name + request timeout knobs for the FlareSolverr bypass. The
+# 30 s ceiling matches FlareSolverr's own `maxTimeout` default; CF's
+# auto-passing challenges typically clear inside 10-15 s, so 30 s is a
+# comfortable upper bound that leaves enough margin to retry once before
+# the resolver's outer 10 s SoftCeiling fires on the first attempt.
+_FLARESOLVERR_ENV = 'WHYKNOT_FLARESOLVERR_URL'
+_FLARESOLVERR_TIMEOUT_MS = 30000
 
 
 _M3U8_RE = r'(https?://(?:www\.)?nepu\.to/public/m3u8/[a-f0-9]+\.m3u8)'
@@ -80,7 +96,53 @@ def _strip_og_title_marketing(title):
     return title.strip() or None
 
 
-class NepuMovieIE(InfoExtractor):
+class _NepuFetchMixin:
+    """Page fetch with optional FlareSolverr routing.
+
+    When `WHYKNOT_FLARESOLVERR_URL` is set, page fetches go through the
+    FlareSolverr `POST /v1` endpoint with `cmd=request.get`. The endpoint
+    returns a JSON envelope whose `solution.response` field is the
+    rendered HTML after the Cloudflare challenge has been cleared; that
+    string substitutes for the page body the regex parsers below expect.
+
+    The env-var gate keeps default behaviour identical for anyone running
+    the plugin outside WhyKnot.dev's infrastructure -- without the var,
+    this method is a thin wrapper around the standard yt-dlp fetch.
+    """
+
+    def _nepu_fetch_page(self, url, video_id):
+        fs_base = os.environ.get(_FLARESOLVERR_ENV)
+        if not fs_base:
+            return self._download_webpage(url, video_id)
+
+        fs_endpoint = fs_base.rstrip('/') + '/v1'
+        payload = {
+            'cmd': 'request.get',
+            'url': url,
+            'maxTimeout': _FLARESOLVERR_TIMEOUT_MS,
+        }
+        resp = self._download_json(
+            fs_endpoint, video_id,
+            data=json.dumps(payload).encode('utf-8'),
+            headers={'Content-Type': 'application/json'},
+            note='Fetching page via FlareSolverr',
+            errnote='FlareSolverr request failed')
+
+        if not isinstance(resp, dict) or resp.get('status') != 'ok':
+            message = resp.get('message') if isinstance(resp, dict) else None
+            raise ExtractorError(
+                f'FlareSolverr did not return ok status: {message or "unknown error"}',
+                expected=True)
+
+        solution = resp.get('solution') or {}
+        body = solution.get('response')
+        if not body:
+            raise ExtractorError(
+                'FlareSolverr response missing solution body', expected=True)
+        return body
+
+
+class NepuMovieIE(_NepuFetchMixin, InfoExtractor):
     IE_NAME = 'whyknot:nepu:movie'
     IE_DESC = 'nepu.to movies'
     _VALID_URL = r'https?://(?:www\.)?nepu\.to/movie/(?P<id>[a-z0-9-]+)'
@@ -100,7 +162,7 @@ class NepuMovieIE(InfoExtractor):
 
     def _real_extract(self, url):
         video_id = self._match_id(url)
-        webpage = self._download_webpage(url, video_id)
+        webpage = self._nepu_fetch_page(url, video_id)
 
         m3u8_url = self._search_regex(
             _M3U8_RE, webpage, 'video url', fatal=True)
@@ -134,7 +196,7 @@ class NepuMovieIE(InfoExtractor):
         }
 
 
-class NepuEpisodeIE(InfoExtractor):
+class NepuEpisodeIE(_NepuFetchMixin, InfoExtractor):
     IE_NAME = 'whyknot:nepu:episode'
     IE_DESC = 'nepu.to show episodes'
     _VALID_URL = (
@@ -163,7 +225,7 @@ class NepuEpisodeIE(InfoExtractor):
         season = int(mobj.group('season'))
         episode = int(mobj.group('episode'))
         video_id = f'{show_slug}-s{season}e{episode}'
-        webpage = self._download_webpage(url, video_id)
+        webpage = self._nepu_fetch_page(url, video_id)
 
         m3u8_url = self._search_regex(
             _M3U8_RE, webpage, 'video url', fatal=True)

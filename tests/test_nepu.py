@@ -25,7 +25,11 @@ import pytest
 
 from yt_dlp import YoutubeDL
 
-from yt_dlp_plugins.extractor.nepu import NepuMovieIE, NepuEpisodeIE
+from yt_dlp_plugins.extractor.nepu import (
+    NepuMovieIE,
+    NepuEpisodeIE,
+    _FLARESOLVERR_ENV,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -267,3 +271,108 @@ def test_episode_id_format_zero_pads_in_title_only():
 def test_m3u8_regex(html, should_match):
     from yt_dlp_plugins.extractor.nepu import _M3U8_RE
     assert bool(re.search(_M3U8_RE, html)) is should_match
+
+
+# ---------------------------------------------------------------------------
+# FlareSolverr fetch path -- behaviour gated on WHYKNOT_FLARESOLVERR_URL.
+#
+# The plain `_download_webpage` path is already exercised by the parse
+# tests above. The tests below assert that when the env var is set the
+# extractor:
+#
+#   1. POSTs to `<base>/v1` with `cmd=request.get`
+#   2. Reads the rendered HTML out of `solution.response`
+#   3. Returns the same info_dict shape as the direct-fetch path
+#   4. Raises on a non-ok FlareSolverr envelope
+#
+# `_download_json` is stubbed so the tests stay offline; we capture the
+# request arguments to verify the wire shape.
+# ---------------------------------------------------------------------------
+
+def _make_extractor_with_flaresolverr_response(cls, response_body, status='ok',
+                                                message=None):
+    ydl = YoutubeDL({'quiet': True, 'no_warnings': True, 'skip_download': True})
+    ie = cls(ydl)
+
+    captured = {}
+
+    def fake_download_json(url, video_id, *args, **kwargs):
+        captured['url'] = url
+        captured['video_id'] = video_id
+        captured['data'] = kwargs.get('data') or (args[0] if args else None)
+        captured['headers'] = kwargs.get('headers')
+        envelope = {'status': status, 'solution': {'response': response_body}}
+        if message is not None:
+            envelope['message'] = message
+        return envelope
+
+    ie._download_json = fake_download_json  # type: ignore[assignment]
+    return ie, captured
+
+
+def test_movie_uses_flaresolverr_when_env_set(monkeypatch):
+    monkeypatch.setenv(_FLARESOLVERR_ENV, 'http://flaresolverr:8191')
+
+    ie, captured = _make_extractor_with_flaresolverr_response(
+        NepuMovieIE, _MOVIE_HTML)
+
+    info = ie._real_extract('https://nepu.to/movie/synthetic-movie-1')
+
+    # FlareSolverr endpoint shape: base + /v1, JSON body with request.get.
+    assert captured['url'] == 'http://flaresolverr:8191/v1'
+    assert captured['headers'] == {'Content-Type': 'application/json'}
+    import json as _json
+    body = _json.loads(captured['data'].decode('utf-8'))
+    assert body['cmd'] == 'request.get'
+    assert body['url'] == 'https://nepu.to/movie/synthetic-movie-1'
+    assert body['maxTimeout'] == 30000
+
+    # The rendered HTML parses the same way the direct-fetch HTML does.
+    assert info['id'] == 'synthetic-movie-1'
+    assert info['url'] == _FIXTURE_M3U8
+    assert info['title'] == 'Synthetic Movie Title (2024)'
+
+
+def test_episode_uses_flaresolverr_when_env_set(monkeypatch):
+    monkeypatch.setenv(_FLARESOLVERR_ENV, 'http://flaresolverr:8191/')
+
+    ie, captured = _make_extractor_with_flaresolverr_response(
+        NepuEpisodeIE, _EPISODE_HTML)
+
+    info = ie._real_extract(
+        'https://nepu.to/show/synthetic-show-7/season/3/episode/4')
+
+    # Trailing slash on the base URL is tolerated -- the helper strips it.
+    assert captured['url'] == 'http://flaresolverr:8191/v1'
+    assert info['id'] == 'synthetic-show-7-s3e4'
+    assert info['url'] == _FIXTURE_M3U8
+    assert info['series'] == 'Synthetic Show (1962)'
+
+
+def test_flaresolverr_non_ok_status_raises(monkeypatch):
+    monkeypatch.setenv(_FLARESOLVERR_ENV, 'http://flaresolverr:8191')
+
+    ie, _ = _make_extractor_with_flaresolverr_response(
+        NepuMovieIE, '', status='error', message='challenge timed out')
+
+    with pytest.raises(Exception) as excinfo:
+        ie._real_extract('https://nepu.to/movie/synthetic-movie-1')
+    assert 'challenge timed out' in str(excinfo.value)
+
+
+def test_flaresolverr_unset_env_falls_back_to_direct_fetch(monkeypatch):
+    # No WHYKNOT_FLARESOLVERR_URL -- the extractor must use _download_webpage,
+    # not _download_json. We assert this by stubbing _download_json to raise
+    # if it gets called.
+    monkeypatch.delenv(_FLARESOLVERR_ENV, raising=False)
+
+    ydl = YoutubeDL({'quiet': True, 'no_warnings': True, 'skip_download': True})
+    ie = NepuMovieIE(ydl)
+    ie._download_webpage = lambda *a, **kw: _MOVIE_HTML  # type: ignore[assignment]
+
+    def _should_not_be_called(*a, **kw):
+        raise AssertionError('_download_json must not be called without the env var')
+    ie._download_json = _should_not_be_called  # type: ignore[assignment]
+
+    info = ie._real_extract('https://nepu.to/movie/synthetic-movie-1')
+    assert info['url'] == _FIXTURE_M3U8

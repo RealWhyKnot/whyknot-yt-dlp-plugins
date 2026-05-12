@@ -8,7 +8,9 @@ release versioning where N is the daily build counter starting at 0).
 
 ## Unreleased
 
-_No notable changes since the last release._
+
+### Added
+- **nepu:** Add extractor for nepu.to movies and show episodes (174a518)
 
 ---
 

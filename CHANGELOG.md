@@ -9,8 +9,12 @@ release versioning where N is the daily build counter starting at 0).
 ## Unreleased
 
 
+
 ### Added
 - **nepu:** Add extractor for nepu.to movies and show episodes (174a518)
+
+### Changed
+- **deps:** Bump actions/setup-python from 5 to 6 (#2) (76e2ead)
 
 ---
 

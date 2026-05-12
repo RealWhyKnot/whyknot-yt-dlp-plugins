@@ -28,6 +28,16 @@ classifiers = [
     "Topic :: Multimedia :: Video",
 ]
 
+# Test-only deps. Installed via `pip install -e ".[test]"`. yt-dlp is pulled
+# in here so the test suite can import yt_dlp.extractor.common, but it stays
+# OUT of `dependencies` so production installs don't clobber the nightly
+# pinned yt-dlp on the nodes (see runtime-deps comment above).
+[project.optional-dependencies]
+test = [
+    "pytest>=7",
+    "yt-dlp",
+]
+
 [project.urls]
 Homepage = "https://whyknot.dev"
 Source = "https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins"

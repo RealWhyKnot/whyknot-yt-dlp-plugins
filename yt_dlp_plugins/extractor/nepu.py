@@ -9,21 +9,23 @@
 # IMPORTANT: nepu.to is fronted by a Cloudflare bot-mitigation challenge.
 # A plain HTTP GET from yt-dlp (even with `--impersonate chrome` via
 # curl-cffi) returns 403; the response body is the challenge page, not
-# the real page, so the m3u8 regex won't match. The challenge clears
-# automatically in a real browser within ~10-15s without user input, so
-# any headless-browser bypass that handles auto-passing challenges is
-# enough -- no Turnstile interactive solving needed.
+# the real page, so the m3u8 regex won't match. Site-level JavaScript on
+# top of CF's own challenge also pops a `window.alert("Close dev tool &
+# reload")` when it sees an automation-flagged browser, which on its own
+# can defeat a one-shot headless-Chromium solver like FlareSolverr; a
+# stealth-configured browser with a cookie store that survives once the
+# challenge has been cleared is the path that actually works.
 #
 # In production, set `WHYKNOT_FLARESOLVERR_URL` to the base URL of a
-# reachable FlareSolverr instance (e.g. `http://flaresolverr:8191` in a
-# container-network setup). When the env var is set, the extractor
-# routes the page fetch through FlareSolverr's `POST /v1` endpoint with
-# `cmd=request.get`, which returns the rendered HTML after the challenge
-# has been cleared. When it is unset, the extractor falls back to a
-# plain `_download_webpage` -- the parser logic is correct against the
-# rendered HTML either way, so a manual `--cookies-from-browser` or
-# `--cookies` flow on a workstation that already cleared the challenge
-# also works.
+# reachable bypass service that speaks the FlareSolverr `POST /v1` wire
+# shape (e.g. `http://whyknot-browser:8191` for the persistent-context
+# Playwright service shipped with WhyKnot.dev, or a stock FlareSolverr
+# instance on a site whose anti-bot it can still defeat). When the env
+# var is set, the extractor POSTs `{cmd:"request.get", url, maxTimeout}`
+# and reads the rendered HTML from `solution.response`. When it is
+# unset, the extractor falls back to a plain `_download_webpage`, so a
+# `--cookies-from-browser` / `--cookies` flow on a workstation that
+# already cleared the challenge keeps working too.
 #
 # The parsing logic in this file is correct against the actual rendered
 # HTML -- it's the fetch step upstream of it that requires the bypass.

@@ -8,7 +8,11 @@ release versioning where N is the daily build counter starting at 0).
 
 ## Unreleased
 
+_No notable changes since the last release._
 
+---
+
+## [v2026.5.13.2](https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins/releases/tag/v2026.5.13.2) - 2026-05-13
 ### Added
 - **nepu:** Return Cookie + User-Agent + Referer in http_headers so the proxy carries the bypass session (4eaabc5)
 

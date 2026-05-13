@@ -8,7 +8,11 @@ release versioning where N is the daily build counter starting at 0).
 
 ## Unreleased
 
+_No notable changes since the last release._
 
+---
+
+## [v2026.5.13.1](https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins/releases/tag/v2026.5.13.1) - 2026-05-13
 ### Fixed
 - **nepu:** Bump bypass HTTP timeout to 60 s so the ~14 s Byparr solve fits (92b8e3e)
 

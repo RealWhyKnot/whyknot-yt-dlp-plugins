@@ -54,6 +54,8 @@ import http.cookiejar
 import json
 import os
 import re
+import tempfile
+import time
 import urllib.parse
 
 from yt_dlp.extractor.common import InfoExtractor
@@ -83,9 +85,112 @@ _BYPASS_MAX_TIMEOUT = 30000
 # variance-driven 17-25 s solve still fits comfortably.
 _BYPASS_HTTP_TIMEOUT = 60
 
+# Bypass session cache. The first /v1 solve costs ~14 s; we persist the
+# resulting cf_clearance + PHPSESSID + UA to disk so subsequent resolves
+# skip the solver entirely and complete in ~1 s. cf_clearance typically
+# lasts 1-2 hours -- 30 minutes is a conservative refresh cadence that
+# leaves headroom against early CF rotation. On any signal that the
+# cache is stale (page fetch 403, /ajax/embed 4xx, missing data-embed)
+# we invalidate and fall through to a Byparr refresh.
+_CACHE_FILENAME = 'nepu_session.json'
+_CACHE_TTL_SECONDS = 30 * 60
+# Override for the cache directory. Defaults to /app/state (the WhyKnot.dev
+# deployment, where /var/lib/whyknot/state is bind-mounted) and falls back
+# to a per-user temp dir for everyone else.
+_CACHE_DIR_ENV = 'WHYKNOT_PLUGIN_STATE_DIR'
+
 _EMBED_API = 'https://nepu.to/ajax/embed'
 _DATA_EMBED_RE = re.compile(r'data-embed="(\d+)"')
 _PLAYERJS_FILE_RE = re.compile(r'"file"\s*:\s*"([^"]+\.m3u8)"')
+
+
+def _nepu_cache_dir():
+    """Resolve the cache directory. Configurable via WHYKNOT_PLUGIN_STATE_DIR.
+    Falls back to /app/state when present (WhyKnot.dev shape) and to a
+    per-user temp dir otherwise. Best-effort: a failure to create the dir
+    just disables the cache and the extractor pays the bypass cost on
+    every resolve as it did before.
+    """
+    override = os.environ.get(_CACHE_DIR_ENV)
+    if override:
+        return override
+    if os.path.isdir('/app/state'):
+        return '/app/state'
+    return os.path.join(tempfile.gettempdir(), 'whyknot-yt-dlp-plugins')
+
+
+def _nepu_cache_path():
+    return os.path.join(_nepu_cache_dir(), _CACHE_FILENAME)
+
+
+def _nepu_load_cached_session():
+    """Returns (cookies, user_agent) if a fresh cache entry exists, else None.
+
+    cookies are the Playwright-shaped dicts the bypass service returns
+    (name/value/domain/path/secure/expires). Filtered to nepu.to so a
+    later cookie-string formatter doesn't have to re-filter.
+    """
+    try:
+        with open(_nepu_cache_path(), 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+
+    saved_at = data.get('saved_at', 0)
+    try:
+        saved_at = float(saved_at)
+    except (TypeError, ValueError):
+        return None
+    if time.time() - saved_at > _CACHE_TTL_SECONDS:
+        return None
+
+    cookies = [c for c in (data.get('cookies') or [])
+               if isinstance(c, dict) and 'nepu.to' in (c.get('domain') or '')]
+    # cf_clearance is the gate. Without it the cached session is useless.
+    if not any(c.get('name') == 'cf_clearance' for c in cookies):
+        return None
+
+    ua = data.get('user_agent') or ''
+    return cookies, ua
+
+
+def _nepu_save_session(cookies, user_agent):
+    """Atomically persist the session. Filters to nepu.to cookies on the way
+    in so we don't sprinkle hcaptcha / other-origin cookies into the cache
+    file. Best-effort: silently no-ops on directory or write failure."""
+    dir_path = _nepu_cache_dir()
+    try:
+        os.makedirs(dir_path, exist_ok=True)
+    except OSError:
+        return
+
+    filtered = [c for c in (cookies or [])
+                if isinstance(c, dict) and 'nepu.to' in (c.get('domain') or '')]
+    if not filtered:
+        return
+
+    cache_path = _nepu_cache_path()
+    tmp_path = cache_path + '.tmp'
+    try:
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            json.dump({
+                'saved_at': int(time.time()),
+                'user_agent': user_agent or '',
+                'cookies': filtered,
+            }, f)
+        os.replace(tmp_path, cache_path)
+    except OSError:
+        try: os.unlink(tmp_path)
+        except OSError: pass
+
+
+def _nepu_invalidate_cache():
+    """Remove the cache file when we have signal that the cookies are stale.
+    Best-effort: missing file is fine."""
+    try:
+        os.unlink(_nepu_cache_path())
+    except OSError:
+        pass
 
 # og:title on nepu is marketing copy, not the canonical title. Two shapes
 # observed in the wild:
@@ -194,48 +299,18 @@ class _NepuResolverMixin:
             )
             jar.set_cookie(ck)
 
-    def _nepu_resolve(self, url, video_id):
-        """Returns (page_html, m3u8_url, user_agent, cookie_header).
+    @staticmethod
+    def _nepu_format_cookie_header(cookies):
+        if not cookies:
+            return ''
+        return '; '.join(
+            f"{c['name']}={c['value']}" for c in cookies
+            if c.get('name') and c.get('value') is not None
+        )
 
-        When the bypass env var is set: GET page via bypass, inject
-        cookies into yt-dlp's jar, then POST /ajax/embed through
-        yt-dlp's HTTP client (which now sees the bypass cookies +
-        an explicit User-Agent that matches the one the bypass used
-        to acquire the cf_clearance).
-
-        Without the env var: try yt-dlp's normal page download and
-        /ajax/embed POST. This succeeds when --cookies-from-browser
-        (or --cookies) is supplying a valid cf_clearance already.
-
-        cookie_header is the serialised Cookie request-header value
-        for the bypass cookies (e.g. "cf_clearance=...; PHPSESSID=...").
-        Returned so the extractor classes can attach it to the info
-        dict's `http_headers`, which downstream consumers like
-        WhyKnot.dev's MediaProxy use when fetching the upstream m3u8
-        and its segments. Empty string when no bypass cookies are in
-        play (i.e. the env var wasn't set).
-        """
-        fs_base = os.environ.get(_BYPASS_ENV)
-        user_agent = ''
-        cookie_header = ''
-        if fs_base:
-            page_html, cookies, user_agent = self._nepu_fetch_via_bypass(
-                fs_base, url, video_id)
-            self._nepu_inject_cookies(cookies)
-            cookie_header = '; '.join(
-                f"{c['name']}={c['value']}" for c in cookies
-                if c.get('name') and c.get('value') is not None
-                and 'nepu.to' in (c.get('domain') or '')
-            )
-        else:
-            page_html = self._download_webpage(url, video_id)
-
-        m = _DATA_EMBED_RE.search(page_html)
-        if not m:
-            raise ExtractorError(
-                'Unable to find embed id (data-embed) in page', expected=True)
-        embed_id = m.group(1)
-
+    def _nepu_post_embed(self, url, video_id, embed_id, user_agent):
+        """POST /ajax/embed and return the response body. Cookies must already
+        be in yt-dlp's cookiejar (caller is responsible)."""
         post_headers = {
             'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
             'X-Requested-With': 'XMLHttpRequest',
@@ -245,21 +320,113 @@ class _NepuResolverMixin:
         }
         if user_agent:
             post_headers['User-Agent'] = user_agent
-
-        embed_html = self._download_webpage(
+        return self._download_webpage(
             _EMBED_API, video_id,
             data=urllib.parse.urlencode({'id': embed_id}).encode(),
             headers=post_headers,
             note='Resolving stream via /ajax/embed',
             errnote='Stream resolution failed')
 
+    @staticmethod
+    def _nepu_parse_m3u8_url(embed_html):
         mm = _PLAYERJS_FILE_RE.search(embed_html)
         if not mm:
-            raise ExtractorError(
-                'Unable to extract m3u8 URL from embed response', expected=True)
+            return None
         m3u8_url = mm.group(1)
         if m3u8_url.startswith('/'):
             m3u8_url = 'https://nepu.to' + m3u8_url
+        return m3u8_url
+
+    def _nepu_resolve(self, url, video_id):
+        """Returns (page_html, m3u8_url, user_agent, cookie_header).
+
+        Two paths:
+
+          Fast path -- a cached bypass session exists and isn't stale.
+          Skip the bypass GET, fetch the page through yt-dlp with the
+          cached cookies + UA in the jar, POST /ajax/embed, parse m3u8.
+          Any failure here (bad regex, 4xx on embed) is treated as
+          cookie-expiry and falls through to the slow path. Wall-clock
+          for a cache hit is ~1 s -- well inside the dispatcher's race
+          deadline.
+
+          Slow path -- no cache or cache expired/invalidated. Call the
+          bypass service to acquire a fresh CF session, persist it to
+          disk for the next ~30 minutes, then run the same /ajax/embed
+          flow. Wall-clock ~14-25 s.
+
+        Without the bypass env var the extractor falls back to a plain
+        yt-dlp page fetch + embed POST; this succeeds when a manual
+        --cookies-from-browser flow on a workstation that already
+        cleared the challenge is in play.
+        """
+        fs_base = os.environ.get(_BYPASS_ENV)
+
+        # Fast path: try the cached session before paying the bypass cost.
+        if fs_base:
+            cached = _nepu_load_cached_session()
+            if cached:
+                try:
+                    return self._nepu_resolve_with_cached_session(
+                        url, video_id, cached[0], cached[1])
+                except ExtractorError as e:
+                    # Anything goes wrong with the cached path -- expired
+                    # cookies, IP rotation, server-side session purge --
+                    # we invalidate and refresh via the bypass.
+                    self.report_warning(
+                        f'nepu cached session failed ({str(e)[:160]}); refreshing via bypass')
+                    _nepu_invalidate_cache()
+
+        # Slow path: bypass refresh.
+        if fs_base:
+            page_html, cookies, user_agent = self._nepu_fetch_via_bypass(
+                fs_base, url, video_id)
+            self._nepu_inject_cookies(cookies)
+            _nepu_save_session(cookies, user_agent)
+        else:
+            page_html = self._download_webpage(url, video_id)
+            cookies = []
+            user_agent = ''
+
+        m = _DATA_EMBED_RE.search(page_html)
+        if not m:
+            raise ExtractorError(
+                'Unable to find embed id (data-embed) in page', expected=True)
+        embed_id = m.group(1)
+        embed_html = self._nepu_post_embed(url, video_id, embed_id, user_agent)
+        m3u8_url = self._nepu_parse_m3u8_url(embed_html)
+        if not m3u8_url:
+            raise ExtractorError(
+                'Unable to extract m3u8 URL from embed response', expected=True)
+        cookie_header = self._nepu_format_cookie_header(
+            [c for c in cookies if 'nepu.to' in (c.get('domain') or '')])
+        return page_html, m3u8_url, user_agent, cookie_header
+
+    def _nepu_resolve_with_cached_session(self, url, video_id, cookies, user_agent):
+        """Cached-session fast path. Raises ExtractorError on any failure
+        so the caller can invalidate and refresh."""
+        self._nepu_inject_cookies(cookies)
+        page_headers = {'User-Agent': user_agent} if user_agent else None
+        page_html = self._download_webpage(
+            url, video_id, headers=page_headers,
+            note='Fetching page (cached bypass session)',
+            errnote='Cached-session page fetch failed')
+
+        m = _DATA_EMBED_RE.search(page_html)
+        if not m:
+            # CF likely served the challenge page because cookies expired.
+            raise ExtractorError(
+                'No data-embed in cached-session page response (cookies likely expired)',
+                expected=True)
+        embed_id = m.group(1)
+
+        embed_html = self._nepu_post_embed(url, video_id, embed_id, user_agent)
+        m3u8_url = self._nepu_parse_m3u8_url(embed_html)
+        if not m3u8_url:
+            raise ExtractorError(
+                'No m3u8 in cached-session embed response (session likely stale)',
+                expected=True)
+        cookie_header = self._nepu_format_cookie_header(cookies)
         return page_html, m3u8_url, user_agent, cookie_header
 
 

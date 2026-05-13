@@ -1,25 +1,29 @@
 # Offline tests for the nepu.to extractor.
 #
-# Two layers:
+# Three layers:
 #
 #   1. URL regex tests -- parametrised cases that walk the supported and
 #      unsupported URL shapes and assert _VALID_URL captures the right
 #      groups. Pure pattern matching, no extractor instance, no network.
 #
-#   2. Parse tests -- build a real extractor instance with a stubbed
-#      YoutubeDL, monkeypatch `_download_webpage` to return an inline
-#      HTML fixture (a string defined in this file -- avoids checking in
-#      page snapshots that could drift or include site-identifying
-#      structure), then call `_real_extract` and assert the returned
-#      info_dict has the m3u8 URL, ext, protocol, and metadata we
-#      planted in the fixture.
+#   2. Resolver / metadata tests -- build a real extractor instance with
+#      a stubbed YoutubeDL, monkeypatch the page fetch and the
+#      /ajax/embed POST to return inline HTML fixtures, then call
+#      `_real_extract` and assert the returned info_dict has the m3u8
+#      URL, ext, protocol, http_headers, and metadata we planted.
 #
-# The fixture HTML uses synthetic slugs and m3u8 hashes so this file is
+#   3. Bypass-path tests -- when WHYKNOT_FLARESOLVERR_URL is set, the
+#      extractor must POST to <base>/v1 first, inject cookies into the
+#      yt-dlp cookiejar, and only then POST /ajax/embed.
+#
+# All fixtures use synthetic slugs and m3u8 hashes so this file is
 # self-contained and the tests pass without any live request.
 
 from __future__ import annotations
 
+import json
 import re
+import urllib.parse
 
 import pytest
 
@@ -28,7 +32,8 @@ from yt_dlp import YoutubeDL
 from yt_dlp_plugins.extractor.nepu import (
     NepuMovieIE,
     NepuEpisodeIE,
-    _FLARESOLVERR_ENV,
+    _BYPASS_ENV,
+    _EMBED_API,
 )
 
 
@@ -36,16 +41,13 @@ from yt_dlp_plugins.extractor.nepu import (
 # Inline HTML fixtures
 # ---------------------------------------------------------------------------
 
-_FIXTURE_M3U8 = 'https://nepu.to/public/m3u8/0123456789abcdef0123456789abcdef.m3u8'
+_FIXTURE_EMBED_ID = '8675309'
+_FIXTURE_M3U8_PATH = '/public/m3u8/0123456789.m3u8'
+_FIXTURE_M3U8 = 'https://nepu.to' + _FIXTURE_M3U8_PATH
 
-# Fixture shapes mirror real nepu.to markup:
-#   - og:title is marketing copy with a "Watch ... Free Online in HD"
-#     envelope (movies) or "Watch ... Shows & Cartoons Free in HD"
-#     envelope (shows). Never the clean title.
-#   - h1 carries the clean title (movies) or the series name (episodes).
-#   - The episode page has a real-content h2 (episode title) followed by
-#     a "Watch History" h2; the extractor must pick the first h2.
-
+# The movie/episode page no longer carries the m3u8 URL directly. What it
+# does carry is a hidden `data-embed="<id>"` on a player-source anchor +
+# a play button; the extractor reads that id and POSTs it to /ajax/embed.
 _MOVIE_HTML = f"""<!doctype html>
 <html>
 <head>
@@ -58,11 +60,11 @@ _MOVIE_HTML = f"""<!doctype html>
   <p>Release date: <span>March 4, 2024</span></p>
   <p>Duration: <span>1h 32m</span></p>
   <p>IMDB: <span>7.4</span></p>
-  <script>
-    const player = new Player({{
-      source: "{_FIXTURE_M3U8}"
-    }});
-  </script>
+  <div class="nav-player-select dropdown">
+    <a class="dropdown-toggle btn-service selected" href="#" data-embed="{_FIXTURE_EMBED_ID}" id="videoSource">Server 1</a>
+  </div>
+  <div id="player"></div>
+  <div class="play-btn" data-id="" data-embed="{_FIXTURE_EMBED_ID}"></div>
 </body>
 </html>
 """
@@ -80,9 +82,23 @@ _EPISODE_HTML = f"""<!doctype html>
   <h2>Pilot Episode</h2>
   <h2>Watch History</h2>
   <p>Air date: <span>September 26, 1962</span></p>
-  <video data-src="{_FIXTURE_M3U8}"></video>
+  <a data-embed="{_FIXTURE_EMBED_ID}" id="videoSource"></a>
 </body>
 </html>
+"""
+
+# The shape /ajax/embed actually returns. The setTimeout/delete block is
+# included so the m3u8 regex has to skip past it to find the real "file"
+# key inside the Playerjs config.
+_EMBED_RESPONSE = f"""<script>
+    var player = new Playerjs({{
+        id: "player",
+        file: [{{"file": "{_FIXTURE_M3U8_PATH}", poster: "https://image.tmdb.org/example.jpg"}}]
+    }});
+    setTimeout(function() {{
+        fetch("/delete_file.php?file=0123456789.m3u8");
+    }}, 8000);
+</script>
 """
 
 
@@ -90,18 +106,36 @@ _EPISODE_HTML = f"""<!doctype html>
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_extractor(cls, html):
-    """Build a `cls` instance whose `_download_webpage` returns `html`.
+def _make_extractor(cls, page_html, embed_html=_EMBED_RESPONSE):
+    """Build a `cls` instance whose page fetch returns page_html and
+    whose /ajax/embed POST returns embed_html.
 
     Uses a real YoutubeDL as the downloader so the extractor's calls
     into the downloader (logging, format helpers, etc) hit a real
-    implementation. Stubbing the downloader surface area by hand turned
-    out to be a moving target across yt-dlp versions.
+    implementation. We monkeypatch `_download_webpage` to route based
+    on the URL argument.
     """
     ydl = YoutubeDL({'quiet': True, 'no_warnings': True, 'skip_download': True})
     ie = cls(ydl)
-    ie._download_webpage = lambda *a, **kw: html  # type: ignore[assignment]
-    return ie
+
+    captured = {'webpage_calls': []}
+
+    def fake_download_webpage(url_or_request, video_id, *args, **kwargs):
+        # _download_webpage receives a URL string when called with a
+        # plain url, or a Request object for POSTs. Normalise.
+        url = url_or_request if isinstance(url_or_request, str) else url_or_request.url
+        entry = {
+            'url': url,
+            'data': kwargs.get('data'),
+            'headers': kwargs.get('headers') or {},
+        }
+        captured['webpage_calls'].append(entry)
+        if _EMBED_API in url:
+            return embed_html
+        return page_html
+
+    ie._download_webpage = fake_download_webpage  # type: ignore[assignment]
+    return ie, captured
 
 
 # ---------------------------------------------------------------------------
@@ -172,58 +206,85 @@ def test_ie_names():
 
 
 # ---------------------------------------------------------------------------
-# Parse tests -- _real_extract against inline HTML fixtures
+# Resolver tests -- _real_extract against inline HTML fixtures (no env var)
 # ---------------------------------------------------------------------------
 
-def test_movie_real_extract_returns_m3u8():
+def test_movie_extract_posts_embed_id_and_returns_m3u8(monkeypatch):
+    monkeypatch.delenv(_BYPASS_ENV, raising=False)
     url = 'https://nepu.to/movie/synthetic-movie-1'
-    ie = _make_extractor(NepuMovieIE, _MOVIE_HTML)
+    ie, captured = _make_extractor(NepuMovieIE, _MOVIE_HTML)
 
     info = ie._real_extract(url)
 
+    # Two webpage fetches: the movie page, then the /ajax/embed POST.
+    assert len(captured['webpage_calls']) == 2
+    assert captured['webpage_calls'][0]['url'] == url
+    embed_call = captured['webpage_calls'][1]
+    assert embed_call['url'] == _EMBED_API
+    # POST body carries the embed id pulled from data-embed.
+    assert embed_call['data'] == urllib.parse.urlencode({'id': _FIXTURE_EMBED_ID}).encode()
+    # The XHR header is required server-side; Origin/Referer too.
+    headers = embed_call['headers']
+    assert headers['X-Requested-With'] == 'XMLHttpRequest'
+    assert headers['Origin'] == 'https://nepu.to'
+    assert headers['Referer'] == url
+    assert headers['Content-Type'].startswith('application/x-www-form-urlencoded')
+
+    # Info dict shape.
     assert info['id'] == 'synthetic-movie-1'
     assert info['url'] == _FIXTURE_M3U8
     assert info['ext'] == 'mp4'
     assert info['protocol'] == 'm3u8_native'
+    # http_headers carries at least Referer for the m3u8 fetch.
+    assert info['http_headers'].get('Referer') == url
 
 
-def test_movie_real_extract_pulls_title_and_description():
-    url = 'https://nepu.to/movie/synthetic-movie-1'
-    ie = _make_extractor(NepuMovieIE, _MOVIE_HTML)
+def test_movie_pulls_title_and_metadata_from_page(monkeypatch):
+    monkeypatch.delenv(_BYPASS_ENV, raising=False)
+    ie, _ = _make_extractor(NepuMovieIE, _MOVIE_HTML)
+    info = ie._real_extract('https://nepu.to/movie/synthetic-movie-1')
 
-    info = ie._real_extract(url)
-
-    # Title comes from the clean h1, not the marketing-copy og:title.
     assert info['title'] == 'Synthetic Movie Title (2024)'
     assert info['description'] == 'A synthetic plot summary used only by the test suite.'
     assert info['thumbnail'] == 'https://nepu.to/static/img/synthetic-movie.jpg'
 
 
-def test_movie_falls_back_to_cleaned_og_title_when_h1_missing():
-    # If a future markup change removes the h1, the og:title fallback
-    # must strip the "Watch ... Free Online in HD" envelope.
+def test_movie_falls_back_to_cleaned_og_title_when_h1_missing(monkeypatch):
+    monkeypatch.delenv(_BYPASS_ENV, raising=False)
     html = (
         '<html><head>'
         '<meta property="og:title" content="Watch Fallback Movie (2020) Free Online in HD">'
-        f'</head><body><video src="{_FIXTURE_M3U8}"></video></body></html>'
+        f'</head><body><a data-embed="{_FIXTURE_EMBED_ID}"></a></body></html>'
     )
-    ie = _make_extractor(NepuMovieIE, html)
+    ie, _ = _make_extractor(NepuMovieIE, html)
     info = ie._real_extract('https://nepu.to/movie/fallback-movie-1')
     assert info['title'] == 'Fallback Movie (2020)'
 
 
-def test_movie_real_extract_raises_when_no_m3u8():
-    url = 'https://nepu.to/movie/no-stream-here-1'
-    ie = _make_extractor(NepuMovieIE, '<html><head><title>x</title></head><body>no stream</body></html>')
-
+def test_movie_raises_when_data_embed_missing(monkeypatch):
+    monkeypatch.delenv(_BYPASS_ENV, raising=False)
+    ie, _ = _make_extractor(
+        NepuMovieIE,
+        '<html><head><title>x</title></head><body>no embed</body></html>',
+    )
     with pytest.raises(Exception):
-        ie._real_extract(url)
+        ie._real_extract('https://nepu.to/movie/no-embed-here-1')
 
 
-def test_episode_real_extract_returns_m3u8_and_metadata():
+def test_movie_raises_when_embed_response_lacks_m3u8(monkeypatch):
+    monkeypatch.delenv(_BYPASS_ENV, raising=False)
+    ie, _ = _make_extractor(
+        NepuMovieIE, _MOVIE_HTML,
+        embed_html='<script>var x = "nothing useful here";</script>',
+    )
+    with pytest.raises(Exception):
+        ie._real_extract('https://nepu.to/movie/no-m3u8-1')
+
+
+def test_episode_extract_returns_m3u8_and_metadata(monkeypatch):
+    monkeypatch.delenv(_BYPASS_ENV, raising=False)
     url = 'https://nepu.to/show/synthetic-show-7/season/3/episode/4'
-    ie = _make_extractor(NepuEpisodeIE, _EPISODE_HTML)
-
+    ie, _ = _make_extractor(NepuEpisodeIE, _EPISODE_HTML)
     info = ie._real_extract(url)
 
     assert info['id'] == 'synthetic-show-7-s3e4'
@@ -241,17 +302,17 @@ def test_episode_real_extract_returns_m3u8_and_metadata():
     assert info['title'] == 'Synthetic Show (1962) - Pilot Episode'
 
 
-def test_episode_id_format_zero_pads_in_title_only():
+def test_episode_id_format_zero_pads_in_title_only(monkeypatch):
     # The synthesised `id` field uses unpadded numbers so it stays stable
     # across single- and double-digit episodes (s1e1 not s01e01). The
     # `title` fallback (when og:title is missing) is the only place that
     # zero-pads. Lock both behaviours.
+    monkeypatch.delenv(_BYPASS_ENV, raising=False)
     url = 'https://nepu.to/show/x-1/season/12/episode/9'
-    ie = _make_extractor(
+    ie, _ = _make_extractor(
         NepuEpisodeIE,
-        f'<html><body><h1>X</h1><video src="{_FIXTURE_M3U8}"></video></body></html>',
+        f'<html><body><h1>X</h1><a data-embed="{_FIXTURE_EMBED_ID}"></a></body></html>',
     )
-
     info = ie._real_extract(url)
     assert info['id'] == 'x-1-s12e9'
     # Title falls back to "Series S{NN}E{NN}" when og:title is missing.
@@ -259,120 +320,175 @@ def test_episode_id_format_zero_pads_in_title_only():
 
 
 # ---------------------------------------------------------------------------
-# Regex sanity: the m3u8 detector should never match unrelated nepu URLs.
+# Bypass-path tests -- WHYKNOT_FLARESOLVERR_URL is set.
+#
+# The bypass returns the rendered page HTML, the cookies it acquired
+# during the CF solve, and the user-agent it used. The extractor must:
+#   1. POST to <base>/v1 with cmd=request.get
+#   2. Inject cookies whose domain contains nepu.to into the YoutubeDL
+#      cookiejar
+#   3. Send the user-agent on the subsequent /ajax/embed POST so the
+#      cf_clearance cookie validates server-side
+#   4. Raise on a non-ok bypass envelope
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize('html, should_match', [
-    (f'<a href="{_FIXTURE_M3U8}">x</a>', True),
-    ('<a href="https://nepu.to/public/m3u8/xyz.m3u8">x</a>', False),  # non-hex char
-    ('<a href="https://nepu.to/public/m3u8/123.mpd">x</a>', False),  # wrong ext
-    ('<a href="https://other.example/public/m3u8/abc123.m3u8">x</a>', False),
-])
-def test_m3u8_regex(html, should_match):
-    from yt_dlp_plugins.extractor.nepu import _M3U8_RE
-    assert bool(re.search(_M3U8_RE, html)) is should_match
-
-
-# ---------------------------------------------------------------------------
-# FlareSolverr fetch path -- behaviour gated on WHYKNOT_FLARESOLVERR_URL.
-#
-# The plain `_download_webpage` path is already exercised by the parse
-# tests above. The tests below assert that when the env var is set the
-# extractor:
-#
-#   1. POSTs to `<base>/v1` with `cmd=request.get`
-#   2. Reads the rendered HTML out of `solution.response`
-#   3. Returns the same info_dict shape as the direct-fetch path
-#   4. Raises on a non-ok FlareSolverr envelope
-#
-# `_download_json` is stubbed so the tests stay offline; we capture the
-# request arguments to verify the wire shape.
-# ---------------------------------------------------------------------------
-
-def _make_extractor_with_flaresolverr_response(cls, response_body, status='ok',
-                                                message=None):
+def _make_extractor_with_bypass(cls, response_body=_MOVIE_HTML, status='ok',
+                                 message=None, cookies=None, user_agent=None,
+                                 embed_html=_EMBED_RESPONSE):
     ydl = YoutubeDL({'quiet': True, 'no_warnings': True, 'skip_download': True})
     ie = cls(ydl)
 
-    captured = {}
+    captured = {'bypass_call': None, 'webpage_calls': []}
 
     def fake_download_json(url, video_id, *args, **kwargs):
-        captured['url'] = url
-        captured['video_id'] = video_id
-        captured['data'] = kwargs.get('data') or (args[0] if args else None)
-        captured['headers'] = kwargs.get('headers')
-        envelope = {'status': status, 'solution': {'response': response_body}}
+        captured['bypass_call'] = {
+            'url': url,
+            'video_id': video_id,
+            'data': kwargs.get('data') or (args[0] if args else None),
+            'headers': kwargs.get('headers'),
+        }
+        envelope = {
+            'status': status,
+            'solution': {
+                'response': response_body,
+                'cookies': cookies or [],
+                'userAgent': user_agent or '',
+            },
+        }
         if message is not None:
             envelope['message'] = message
         return envelope
 
+    def fake_download_webpage(url_or_request, video_id, *args, **kwargs):
+        url = url_or_request if isinstance(url_or_request, str) else url_or_request.url
+        captured['webpage_calls'].append({
+            'url': url,
+            'data': kwargs.get('data'),
+            'headers': kwargs.get('headers') or {},
+        })
+        if _EMBED_API in url:
+            return embed_html
+        return response_body
+
     ie._download_json = fake_download_json  # type: ignore[assignment]
+    ie._download_webpage = fake_download_webpage  # type: ignore[assignment]
     return ie, captured
 
 
-def test_movie_uses_flaresolverr_when_env_set(monkeypatch):
-    monkeypatch.setenv(_FLARESOLVERR_ENV, 'http://flaresolverr:8191')
-
-    ie, captured = _make_extractor_with_flaresolverr_response(
-        NepuMovieIE, _MOVIE_HTML)
+def test_bypass_drives_v1_then_embed_post(monkeypatch):
+    monkeypatch.setenv(_BYPASS_ENV, 'http://byparr:8191')
+    ie, captured = _make_extractor_with_bypass(
+        NepuMovieIE,
+        cookies=[
+            {'name': 'cf_clearance', 'value': 'abc', 'domain': '.nepu.to', 'path': '/', 'secure': True},
+            {'name': 'PHPSESSID', 'value': 'xyz', 'domain': 'nepu.to', 'path': '/'},
+        ],
+        user_agent='Mozilla/5.0 (X11; Linux x86_64) Firefox/135.0',
+    )
 
     info = ie._real_extract('https://nepu.to/movie/synthetic-movie-1')
 
-    # FlareSolverr endpoint shape: base + /v1, JSON body with request.get.
-    assert captured['url'] == 'http://flaresolverr:8191/v1'
-    assert captured['headers'] == {'Content-Type': 'application/json'}
-    import json as _json
-    body = _json.loads(captured['data'].decode('utf-8'))
+    # 1. Bypass POST -- correct endpoint + request.get payload.
+    bc = captured['bypass_call']
+    assert bc['url'] == 'http://byparr:8191/v1'
+    body = json.loads(bc['data'].decode('utf-8'))
     assert body['cmd'] == 'request.get'
     assert body['url'] == 'https://nepu.to/movie/synthetic-movie-1'
-    assert body['maxTimeout'] == 30000
 
-    # The rendered HTML parses the same way the direct-fetch HTML does.
-    assert info['id'] == 'synthetic-movie-1'
+    # 2. /ajax/embed POST -- the only _download_webpage call.
+    assert len(captured['webpage_calls']) == 1
+    embed_call = captured['webpage_calls'][0]
+    assert embed_call['url'] == _EMBED_API
+    # User-Agent from bypass forwarded onto the POST.
+    assert embed_call['headers']['User-Agent'] == 'Mozilla/5.0 (X11; Linux x86_64) Firefox/135.0'
+
+    # 3. Cookies injected into the cookiejar.
+    jar = ie._downloader.cookiejar
+    names = {c.name for c in jar if 'nepu.to' in c.domain}
+    assert 'cf_clearance' in names
+    assert 'PHPSESSID' in names
+
+    # 4. Info dict
     assert info['url'] == _FIXTURE_M3U8
-    assert info['title'] == 'Synthetic Movie Title (2024)'
+    assert info['http_headers']['User-Agent'] == 'Mozilla/5.0 (X11; Linux x86_64) Firefox/135.0'
 
 
-def test_episode_uses_flaresolverr_when_env_set(monkeypatch):
-    monkeypatch.setenv(_FLARESOLVERR_ENV, 'http://flaresolverr:8191/')
+def test_bypass_skips_non_nepu_cookies(monkeypatch):
+    # Some bypass services also return cookies from other origins they
+    # touched during the solve (e.g. hcaptcha). Those must not land in
+    # the jar -- they would confuse domain matching on the /ajax/embed
+    # POST and on the m3u8 fetch.
+    monkeypatch.setenv(_BYPASS_ENV, 'http://byparr:8191')
+    ie, _ = _make_extractor_with_bypass(
+        NepuMovieIE,
+        cookies=[
+            {'name': 'cf_clearance', 'value': 'abc', 'domain': '.nepu.to', 'path': '/'},
+            {'name': '__cf_bm', 'value': 'foo', 'domain': '.hcaptcha.com', 'path': '/'},
+        ],
+        user_agent='UA',
+    )
+    ie._real_extract('https://nepu.to/movie/synthetic-movie-1')
+    jar = ie._downloader.cookiejar
+    domains = {c.domain for c in jar}
+    assert '.nepu.to' in domains
+    assert '.hcaptcha.com' not in domains
 
-    ie, captured = _make_extractor_with_flaresolverr_response(
-        NepuEpisodeIE, _EPISODE_HTML)
 
-    info = ie._real_extract(
-        'https://nepu.to/show/synthetic-show-7/season/3/episode/4')
-
-    # Trailing slash on the base URL is tolerated -- the helper strips it.
-    assert captured['url'] == 'http://flaresolverr:8191/v1'
-    assert info['id'] == 'synthetic-show-7-s3e4'
-    assert info['url'] == _FIXTURE_M3U8
-    assert info['series'] == 'Synthetic Show (1962)'
-
-
-def test_flaresolverr_non_ok_status_raises(monkeypatch):
-    monkeypatch.setenv(_FLARESOLVERR_ENV, 'http://flaresolverr:8191')
-
-    ie, _ = _make_extractor_with_flaresolverr_response(
-        NepuMovieIE, '', status='error', message='challenge timed out')
-
+def test_bypass_non_ok_status_raises(monkeypatch):
+    monkeypatch.setenv(_BYPASS_ENV, 'http://byparr:8191')
+    ie, _ = _make_extractor_with_bypass(
+        NepuMovieIE, response_body='', status='error',
+        message='challenge timed out',
+    )
     with pytest.raises(Exception) as excinfo:
         ie._real_extract('https://nepu.to/movie/synthetic-movie-1')
     assert 'challenge timed out' in str(excinfo.value)
 
 
-def test_flaresolverr_unset_env_falls_back_to_direct_fetch(monkeypatch):
-    # No WHYKNOT_FLARESOLVERR_URL -- the extractor must use _download_webpage,
-    # not _download_json. We assert this by stubbing _download_json to raise
-    # if it gets called.
-    monkeypatch.delenv(_FLARESOLVERR_ENV, raising=False)
+def test_bypass_unset_skips_v1_path(monkeypatch):
+    # No env var -- the extractor must use _download_webpage twice
+    # (page + embed) and NEVER call _download_json.
+    monkeypatch.delenv(_BYPASS_ENV, raising=False)
 
     ydl = YoutubeDL({'quiet': True, 'no_warnings': True, 'skip_download': True})
     ie = NepuMovieIE(ydl)
-    ie._download_webpage = lambda *a, **kw: _MOVIE_HTML  # type: ignore[assignment]
+
+    def fake_download_webpage(url_or_request, video_id, *args, **kwargs):
+        url = url_or_request if isinstance(url_or_request, str) else url_or_request.url
+        if _EMBED_API in url:
+            return _EMBED_RESPONSE
+        return _MOVIE_HTML
 
     def _should_not_be_called(*a, **kw):
         raise AssertionError('_download_json must not be called without the env var')
+
+    ie._download_webpage = fake_download_webpage  # type: ignore[assignment]
     ie._download_json = _should_not_be_called  # type: ignore[assignment]
 
     info = ie._real_extract('https://nepu.to/movie/synthetic-movie-1')
     assert info['url'] == _FIXTURE_M3U8
+
+
+def test_bypass_url_trailing_slash_tolerated(monkeypatch):
+    monkeypatch.setenv(_BYPASS_ENV, 'http://byparr:8191/')
+    ie, captured = _make_extractor_with_bypass(
+        NepuEpisodeIE, response_body=_EPISODE_HTML,
+    )
+    ie._real_extract('https://nepu.to/show/synthetic-show-7/season/3/episode/4')
+    assert captured['bypass_call']['url'] == 'http://byparr:8191/v1'
+
+
+# ---------------------------------------------------------------------------
+# Lower-level regex sanity for the m3u8 path extraction.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize('snippet, expected', [
+    ('"file": "/public/m3u8/abc123.m3u8"', '/public/m3u8/abc123.m3u8'),
+    ('"file"  :  "https://nepu.to/public/m3u8/abc123.m3u8"',
+     'https://nepu.to/public/m3u8/abc123.m3u8'),
+    ('something else', None),
+])
+def test_playerjs_file_regex(snippet, expected):
+    from yt_dlp_plugins.extractor.nepu import _PLAYERJS_FILE_RE
+    m = _PLAYERJS_FILE_RE.search(snippet)
+    assert (m.group(1) if m else None) == expected

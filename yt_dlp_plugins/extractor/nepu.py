@@ -195,7 +195,7 @@ class _NepuResolverMixin:
             jar.set_cookie(ck)
 
     def _nepu_resolve(self, url, video_id):
-        """Returns (page_html, m3u8_url, user_agent).
+        """Returns (page_html, m3u8_url, user_agent, cookie_header).
 
         When the bypass env var is set: GET page via bypass, inject
         cookies into yt-dlp's jar, then POST /ajax/embed through
@@ -206,13 +206,27 @@ class _NepuResolverMixin:
         Without the env var: try yt-dlp's normal page download and
         /ajax/embed POST. This succeeds when --cookies-from-browser
         (or --cookies) is supplying a valid cf_clearance already.
+
+        cookie_header is the serialised Cookie request-header value
+        for the bypass cookies (e.g. "cf_clearance=...; PHPSESSID=...").
+        Returned so the extractor classes can attach it to the info
+        dict's `http_headers`, which downstream consumers like
+        WhyKnot.dev's MediaProxy use when fetching the upstream m3u8
+        and its segments. Empty string when no bypass cookies are in
+        play (i.e. the env var wasn't set).
         """
         fs_base = os.environ.get(_BYPASS_ENV)
         user_agent = ''
+        cookie_header = ''
         if fs_base:
             page_html, cookies, user_agent = self._nepu_fetch_via_bypass(
                 fs_base, url, video_id)
             self._nepu_inject_cookies(cookies)
+            cookie_header = '; '.join(
+                f"{c['name']}={c['value']}" for c in cookies
+                if c.get('name') and c.get('value') is not None
+                and 'nepu.to' in (c.get('domain') or '')
+            )
         else:
             page_html = self._download_webpage(url, video_id)
 
@@ -246,13 +260,24 @@ class _NepuResolverMixin:
         m3u8_url = mm.group(1)
         if m3u8_url.startswith('/'):
             m3u8_url = 'https://nepu.to' + m3u8_url
-        return page_html, m3u8_url, user_agent
+        return page_html, m3u8_url, user_agent, cookie_header
 
 
-def _http_headers_for(url, user_agent):
+def _http_headers_for(url, user_agent, cookie_header=''):
+    """Build the per-format http_headers dict the extractor returns.
+
+    The Referer is always the page URL (the segment CDN whitelists referrers
+    from the page that issued the playlist). User-Agent and Cookie come from
+    the bypass solver session when one ran. Downstream consumers (yt-dlp's
+    own m3u8 download, WhyKnot.dev's MediaProxy) use this dict verbatim --
+    Cookie carries cf_clearance + PHPSESSID so the m3u8 fetch validates
+    server-side without a second bypass round-trip.
+    """
     headers = {'Referer': url}
     if user_agent:
         headers['User-Agent'] = user_agent
+    if cookie_header:
+        headers['Cookie'] = cookie_header
     return headers
 
 
@@ -276,7 +301,7 @@ class NepuMovieIE(_NepuResolverMixin, InfoExtractor):
 
     def _real_extract(self, url):
         video_id = self._match_id(url)
-        page_html, m3u8_url, user_agent = self._nepu_resolve(url, video_id)
+        page_html, m3u8_url, user_agent, cookie_header = self._nepu_resolve(url, video_id)
 
         title = self._html_search_regex(
             r'<h1[^>]*>([^<]+)</h1>', page_html, 'title',
@@ -293,7 +318,7 @@ class NepuMovieIE(_NepuResolverMixin, InfoExtractor):
             'url': m3u8_url,
             'ext': 'mp4',
             'protocol': 'm3u8_native',
-            'http_headers': _http_headers_for(url, user_agent),
+            'http_headers': _http_headers_for(url, user_agent, cookie_header),
             'description': self._og_search_description(page_html, default=None),
             'thumbnail': self._og_search_thumbnail(page_html, default=None),
             'release_date': unified_strdate(self._html_search_regex(
@@ -337,7 +362,7 @@ class NepuEpisodeIE(_NepuResolverMixin, InfoExtractor):
         season = int(mobj.group('season'))
         episode = int(mobj.group('episode'))
         video_id = f'{show_slug}-s{season}e{episode}'
-        page_html, m3u8_url, user_agent = self._nepu_resolve(url, video_id)
+        page_html, m3u8_url, user_agent, cookie_header = self._nepu_resolve(url, video_id)
 
         series = self._html_search_regex(
             r'<h1[^>]*>([^<]+)</h1>', page_html, 'series',
@@ -371,7 +396,7 @@ class NepuEpisodeIE(_NepuResolverMixin, InfoExtractor):
             'url': m3u8_url,
             'ext': 'mp4',
             'protocol': 'm3u8_native',
-            'http_headers': _http_headers_for(url, user_agent),
+            'http_headers': _http_headers_for(url, user_agent, cookie_header),
             'series': series,
             'season_number': season,
             'episode_number': episode,

@@ -8,7 +8,9 @@ release versioning where N is the daily build counter starting at 0).
 
 ## Unreleased
 
-_No notable changes since the last release._
+
+### Added
+- **nepu:** Two-step resolve (page -> data-embed -> /ajax/embed) so the new player gets a real m3u8 (b405dd8)
 
 ---
 

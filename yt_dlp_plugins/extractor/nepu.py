@@ -92,7 +92,14 @@ _BYPASS_HTTP_TIMEOUT = 60
 # leaves headroom against early CF rotation. On any signal that the
 # cache is stale (page fetch 403, /ajax/embed 4xx, missing data-embed)
 # we invalidate and fall through to a Byparr refresh.
-_CACHE_FILENAME = 'nepu_session.json'
+# Path: <state-dir>/upstream_session/nepu.to.json. The per-host
+# subdirectory is the contract WhyKnot.dev's MediaProxy reads from when
+# it needs the same session for its own upstream fetches -- the
+# extractor and the proxy share a single source of truth on disk, no
+# IPC between them.
+_CACHE_SUBDIR = 'upstream_session'
+_CACHE_HOST = 'nepu.to'
+_CACHE_FILENAME = _CACHE_HOST + '.json'
 _CACHE_TTL_SECONDS = 30 * 60
 # Override for the cache directory. Defaults to /app/state (the WhyKnot.dev
 # deployment, where /var/lib/whyknot/state is bind-mounted) and falls back
@@ -120,7 +127,7 @@ def _nepu_cache_dir():
 
 
 def _nepu_cache_path():
-    return os.path.join(_nepu_cache_dir(), _CACHE_FILENAME)
+    return os.path.join(_nepu_cache_dir(), _CACHE_SUBDIR, _CACHE_FILENAME)
 
 
 def _nepu_load_cached_session():
@@ -158,9 +165,9 @@ def _nepu_save_session(cookies, user_agent):
     """Atomically persist the session. Filters to nepu.to cookies on the way
     in so we don't sprinkle hcaptcha / other-origin cookies into the cache
     file. Best-effort: silently no-ops on directory or write failure."""
-    dir_path = _nepu_cache_dir()
+    cache_path = _nepu_cache_path()
     try:
-        os.makedirs(dir_path, exist_ok=True)
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
     except OSError:
         return
 
@@ -169,7 +176,6 @@ def _nepu_save_session(cookies, user_agent):
     if not filtered:
         return
 
-    cache_path = _nepu_cache_path()
     tmp_path = cache_path + '.tmp'
     try:
         with open(tmp_path, 'w', encoding='utf-8') as f:

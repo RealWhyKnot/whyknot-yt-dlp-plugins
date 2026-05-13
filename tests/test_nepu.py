@@ -35,6 +35,7 @@ from yt_dlp_plugins.extractor.nepu import (
     _BYPASS_ENV,
     _CACHE_DIR_ENV,
     _CACHE_FILENAME,
+    _CACHE_SUBDIR,
     _CACHE_TTL_SECONDS,
     _EMBED_API,
 )
@@ -537,13 +538,15 @@ def _write_cache(dir_path, cookies, user_agent='UA-cache', saved_at=None):
     import json as _json
     import time as _time
     import os as _os
+    from yt_dlp_plugins.extractor.nepu import _CACHE_SUBDIR
     payload = {
         'saved_at': saved_at if saved_at is not None else int(_time.time()),
         'user_agent': user_agent,
         'cookies': cookies,
     }
-    _os.makedirs(dir_path, exist_ok=True)
-    with open(_os.path.join(dir_path, _CACHE_FILENAME), 'w', encoding='utf-8') as f:
+    subdir = _os.path.join(dir_path, _CACHE_SUBDIR)
+    _os.makedirs(subdir, exist_ok=True)
+    with open(_os.path.join(subdir, _CACHE_FILENAME), 'w', encoding='utf-8') as f:
         _json.dump(payload, f)
 
 
@@ -640,7 +643,7 @@ def test_cache_expired_falls_through_to_bypass(monkeypatch, tmp_path):
 
     # Cache file is now refreshed -- check the value reflects the new cookies.
     import json as _json
-    saved = _json.load(open(tmp_path / _CACHE_FILENAME, 'r', encoding='utf-8'))
+    saved = _json.load(open(tmp_path / _CACHE_SUBDIR / _CACHE_FILENAME, 'r', encoding='utf-8'))
     assert any(c['value'] == 'fresh' for c in saved['cookies'])
     assert saved['user_agent'] == 'UA-fresh'
 
@@ -678,7 +681,7 @@ def test_cache_save_filters_to_nepu_cookies(monkeypatch, tmp_path):
     ie._real_extract('https://nepu.to/movie/synthetic-movie-1')
 
     import json as _json
-    saved = _json.load(open(tmp_path / _CACHE_FILENAME, 'r', encoding='utf-8'))
+    saved = _json.load(open(tmp_path / _CACHE_SUBDIR / _CACHE_FILENAME, 'r', encoding='utf-8'))
     domains = {c['domain'] for c in saved['cookies']}
     assert '.hcaptcha.com' not in domains
     assert any('nepu.to' in d for d in domains)
@@ -731,7 +734,7 @@ def test_cached_session_page_fetch_failure_falls_back(monkeypatch, tmp_path):
     # The cache file should have been invalidated, then re-written with the
     # fresh session.
     import json as _json
-    saved = _json.load(open(tmp_path / _CACHE_FILENAME, 'r', encoding='utf-8'))
+    saved = _json.load(open(tmp_path / _CACHE_SUBDIR / _CACHE_FILENAME, 'r', encoding='utf-8'))
     assert any(c['value'] == 'fresh' for c in saved['cookies'])
 
 

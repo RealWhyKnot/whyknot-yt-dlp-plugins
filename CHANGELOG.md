@@ -8,7 +8,11 @@ release versioning where N is the daily build counter starting at 0).
 
 ## Unreleased
 
+_No notable changes since the last release._
 
+---
+
+## [v2026.5.13.4](https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins/releases/tag/v2026.5.13.4) - 2026-05-13
 ### Added
 - **nepu:** Cache path -> upstream_session/<host>.json shared with downstream proxy (a627a11)
 

@@ -8,7 +8,11 @@ release versioning where N is the daily build counter starting at 0).
 
 ## Unreleased
 
+_No notable changes since the last release._
 
+---
+
+## [v2026.5.13.0](https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins/releases/tag/v2026.5.13.0) - 2026-05-13
 ### Added
 - **nepu:** Two-step resolve (page -> data-embed -> /ajax/embed) so the new player gets a real m3u8 (b405dd8)
 

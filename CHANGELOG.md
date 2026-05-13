@@ -8,7 +8,9 @@ release versioning where N is the daily build counter starting at 0).
 
 ## Unreleased
 
-_No notable changes since the last release._
+
+### Added
+- **nepu:** Cache bypass session on disk so subsequent resolves skip the ~14s solve (8aaf549)
 
 ---
 

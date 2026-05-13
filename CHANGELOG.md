@@ -8,7 +8,11 @@ release versioning where N is the daily build counter starting at 0).
 
 ## Unreleased
 
+_No notable changes since the last release._
 
+---
+
+## [v2026.5.13.3](https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins/releases/tag/v2026.5.13.3) - 2026-05-13
 ### Added
 - **nepu:** Cache bypass session on disk so subsequent resolves skip the ~14s solve (8aaf549)
 

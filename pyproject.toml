@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "whyknot-yt-dlp-plugins"
-version = "2026.5.13.2"
+version = "2026.5.13.3"
 description = "Placeholder yt-dlp plugin package for WhyKnot.dev"
 readme = "README.md"
 license = "GPL-3.0-or-later"

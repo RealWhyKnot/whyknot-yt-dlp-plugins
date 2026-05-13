@@ -8,7 +8,9 @@ release versioning where N is the daily build counter starting at 0).
 
 ## Unreleased
 
-_No notable changes since the last release._
+
+### Fixed
+- **nepu:** Bump bypass HTTP timeout to 60 s so the ~14 s Byparr solve fits (92b8e3e)
 
 ---
 

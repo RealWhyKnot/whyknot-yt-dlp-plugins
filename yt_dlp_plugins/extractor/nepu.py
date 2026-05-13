@@ -57,6 +57,7 @@ import re
 import urllib.parse
 
 from yt_dlp.extractor.common import InfoExtractor
+from yt_dlp.networking import Request
 from yt_dlp.utils import (
     ExtractorError,
     float_or_none,
@@ -69,12 +70,18 @@ from yt_dlp.utils import (
 # shaped for compatibility -- any service that speaks the FlareSolverr
 # POST /v1 wire (e.g. Byparr, stock FlareSolverr) works here.
 _BYPASS_ENV = 'WHYKNOT_FLARESOLVERR_URL'
-# Tens of seconds. FlareSolverr reads this as milliseconds, Byparr as
-# seconds. We split the difference by sending the largest value that
-# is still sane in either unit: 30000 means "30 s" to FlareSolverr and
-# "much longer than we care about, but solver will return early" to
-# Byparr. Real solve wall-clock is ~10-15 s.
+# In-payload solver budget. FlareSolverr reads this as milliseconds,
+# Byparr as seconds. We split the difference by sending the largest
+# value that is still sane in either unit: 30000 means "30 s" to
+# FlareSolverr and "much longer than we care about, but solver will
+# return early" to Byparr. Real solve wall-clock is ~10-15 s.
 _BYPASS_MAX_TIMEOUT = 30000
+# Socket timeout on the HTTP call to the bypass service. yt-dlp's
+# default socket_timeout is 20 s which is too tight: Byparr/Camoufox
+# routinely takes 14 s end-to-end on a cold solve, leaving almost no
+# slack for the TCP handshake + JSON parse. Bumped to 60 s so a
+# variance-driven 17-25 s solve still fits comfortably.
+_BYPASS_HTTP_TIMEOUT = 60
 
 _EMBED_API = 'https://nepu.to/ajax/embed'
 _DATA_EMBED_RE = re.compile(r'data-embed="(\d+)"')
@@ -114,15 +121,24 @@ class _NepuResolverMixin:
     def _nepu_fetch_via_bypass(self, fs_base, url, video_id):
         """Drive the FlareSolverr-compatible bypass to get HTML + cookies + UA."""
         fs_endpoint = fs_base.rstrip('/') + '/v1'
-        payload = {
+        payload = json.dumps({
             'cmd': 'request.get',
             'url': url,
             'maxTimeout': _BYPASS_MAX_TIMEOUT,
-        }
-        resp = self._download_json(
-            fs_endpoint, video_id,
-            data=json.dumps(payload).encode('utf-8'),
+        }).encode('utf-8')
+        # Pre-build the Request so we can attach a longer per-request
+        # socket timeout via extensions. yt-dlp's networking layer
+        # honours extensions['timeout'] and merges it with the global
+        # socket_timeout in YoutubeDL params.
+        req = Request(
+            fs_endpoint,
+            data=payload,
             headers={'Content-Type': 'application/json'},
+            method='POST',
+            extensions={'timeout': _BYPASS_HTTP_TIMEOUT},
+        )
+        resp = self._download_json(
+            req, video_id,
             note='Fetching page via bypass service',
             errnote='Bypass service request failed')
 

@@ -340,13 +340,28 @@ def _make_extractor_with_bypass(cls, response_body=_MOVIE_HTML, status='ok',
 
     captured = {'bypass_call': None, 'webpage_calls': []}
 
-    def fake_download_json(url, video_id, *args, **kwargs):
-        captured['bypass_call'] = {
-            'url': url,
-            'video_id': video_id,
-            'data': kwargs.get('data') or (args[0] if args else None),
-            'headers': kwargs.get('headers'),
-        }
+    def fake_download_json(url_or_request, video_id, *args, **kwargs):
+        # The extractor passes a yt_dlp.networking.Request so it can
+        # attach an extended socket timeout. Normalise so the tests can
+        # introspect either path.
+        if hasattr(url_or_request, 'url'):
+            captured['bypass_call'] = {
+                'url': url_or_request.url,
+                'video_id': video_id,
+                'data': url_or_request.data,
+                'headers': dict(url_or_request.headers),
+                'extensions': dict(getattr(url_or_request, 'extensions', {}) or {}),
+                'method': url_or_request.method,
+            }
+        else:
+            captured['bypass_call'] = {
+                'url': url_or_request,
+                'video_id': video_id,
+                'data': kwargs.get('data') or (args[0] if args else None),
+                'headers': kwargs.get('headers'),
+                'extensions': {},
+                'method': 'GET',
+            }
         envelope = {
             'status': status,
             'solution': {
@@ -467,6 +482,18 @@ def test_bypass_unset_skips_v1_path(monkeypatch):
 
     info = ie._real_extract('https://nepu.to/movie/synthetic-movie-1')
     assert info['url'] == _FIXTURE_M3U8
+
+
+def test_bypass_request_uses_extended_socket_timeout(monkeypatch):
+    # Byparr/Camoufox solves take ~14 s end-to-end; yt-dlp's default
+    # socket_timeout is 20 s which is tight. The extractor must attach
+    # extensions['timeout'] to bump the per-request budget.
+    monkeypatch.setenv(_BYPASS_ENV, 'http://byparr:8191')
+    ie, captured = _make_extractor_with_bypass(NepuMovieIE)
+    ie._real_extract('https://nepu.to/movie/synthetic-movie-1')
+    extensions = captured['bypass_call'].get('extensions') or {}
+    assert extensions.get('timeout', 0) >= 60
+    assert captured['bypass_call']['method'] == 'POST'
 
 
 def test_bypass_url_trailing_slash_tolerated(monkeypatch):

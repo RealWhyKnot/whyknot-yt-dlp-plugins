@@ -8,7 +8,9 @@ release versioning where N is the daily build counter starting at 0).
 
 ## Unreleased
 
-_No notable changes since the last release._
+
+### Added
+- **nepu:** Return Cookie + User-Agent + Referer in http_headers so the proxy carries the bypass session (4eaabc5)
 
 ---
 

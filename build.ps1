@@ -33,15 +33,16 @@ $StateFile = Join-Path $PSScriptRoot ".local_build_state.json"
 
 # --- Versioning ---
 if ($Version) {
-    if ($Version -notmatch '^\d{4}\.\d+\.\d+\.\d+(-beta(\.\d+)?)?$') {
-        throw "Invalid -Version '$Version'. Expected YYYY.M.D.N or YYYY.M.D.N-beta[.N] (CalVer)."
+    if ($Version -notmatch '^\d{4}\.\d+\.\d+\.\d+(-beta)?$') {
+        throw "Invalid -Version '$Version'. Expected YYYY.M.D.N or YYYY.M.D.N-beta (CalVer)."
     }
-    # Translate -beta[.N] to PEP 440 pre-release notation (bN) for pyproject.toml.
+    # Translate -beta to PEP 440 pre-release notation (b0) for pyproject.toml.
     # The tag itself keeps the -beta suffix; only the version written to the
-    # package metadata is normalised. Examples:
-    #   2026.5.17.0-beta   -> 2026.5.17.0b0
-    #   2026.5.17.0-beta.1 -> 2026.5.17.0b1
-    $FullVersion = $Version -replace '-beta\.(\d+)','b$1' -replace '-beta$','b0'
+    # package metadata is normalised. Example:
+    #   2026.5.17.0-beta -> 2026.5.17.0b0
+    # If you need to ship a second pre-release for the same numeric base,
+    # bump the patch instead (2026.5.17.1-beta).
+    $FullVersion = $Version -replace '-beta$','b0'
 } else {
     $Today = Get-Date -Format "yyyy.M.d"
     $BuildCount = 0

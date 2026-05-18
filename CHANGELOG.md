@@ -8,7 +8,11 @@ release versioning where N is the daily build counter starting at 0).
 
 ## Unreleased
 
+_No notable changes since the last release._
 
+---
+
+## [v2026.5.18.0](https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins/releases/tag/v2026.5.18.0) - 2026-05-18
 ### Changed
 - nepu: hint at missing numeric id when page has no data-embed (6ebdb2b)
 

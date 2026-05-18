@@ -43,6 +43,19 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Detect beta tag
+        id: beta
+        shell: bash
+        run: |
+          tag="${{ github.ref_name }}"
+          if [[ "$tag" == *-beta* ]]; then
+            echo "is_beta=true"  >> "$GITHUB_OUTPUT"
+            echo "release_flags=--prerelease --latest=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_beta=false" >> "$GITHUB_OUTPUT"
+            echo "release_flags=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -161,7 +174,8 @@ jobs:
           set -euo pipefail
           gh release create "$TAG_NAME" "$WHEEL" "$SDIST" \
             --title "$TAG_NAME" \
-            --notes-file "${{ steps.body.outputs.body_file }}"
+            --notes-file "${{ steps.body.outputs.body_file }}" \
+            ${{ steps.beta.outputs.release_flags }}
 
       - name: Verify published release body matches input
         shell: bash
@@ -220,6 +234,7 @@ jobs:
           grep -qE 'Extractor Plugins:.*WhyKnotPluginPlaceholderIE' "$smoke_dir/out"
 
       - name: Commit promoted CHANGELOG.md + pyproject.toml back to main (verified)
+        if: ${{ steps.beta.outputs.is_beta != 'true' }}
         # Same createCommitOnBranch pattern as changelog-append.yml so the
         # promotion commit lands signed and clears the protected-branch
         # signature rule (when one is added). Mirrors two files back to main:

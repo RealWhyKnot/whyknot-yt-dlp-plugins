@@ -396,8 +396,18 @@ class _NepuResolverMixin:
 
         m = _DATA_EMBED_RE.search(page_html)
         if not m:
+            # The page rendered fine but has no video element. Most common cause
+            # is a URL that's missing the trailing numeric ID (e.g.
+            # /movie/night-of-the-living-dead-1968 instead of
+            # /movie/night-of-the-living-dead-1968-1968-177219) -- the site
+            # redirects to /movie/- and serves a generic shell page. Surface
+            # that hint instead of a generic "no data-embed" message.
+            hint = ''
+            if 'canonical' in page_html and 'movie/-' in page_html:
+                hint = (' (page canonical is /movie/-, so the URL did not match a'
+                        ' catalog entry -- check the slug and trailing numeric id)')
             raise ExtractorError(
-                'Unable to find embed id (data-embed) in page', expected=True)
+                f'Unable to find embed id (data-embed) in page{hint}', expected=True)
         embed_id = m.group(1)
         embed_html = self._nepu_post_embed(url, video_id, embed_id, user_agent)
         m3u8_url = self._nepu_parse_m3u8_url(embed_html)

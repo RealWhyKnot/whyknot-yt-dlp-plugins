@@ -8,7 +8,9 @@ release versioning where N is the daily build counter starting at 0).
 
 ## Unreleased
 
-_No notable changes since the last release._
+
+### Fixed
+- **nepu:** Mirror session under segment CDN apex (aadcb84)
 
 ---
 

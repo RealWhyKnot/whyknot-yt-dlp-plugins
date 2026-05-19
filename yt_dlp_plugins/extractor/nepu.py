@@ -161,13 +161,20 @@ def _nepu_load_cached_session():
     return cookies, ua
 
 
-def _nepu_save_session(cookies, user_agent):
-    """Atomically persist the session. Filters to nepu.to cookies on the way
-    in so we don't sprinkle hcaptcha / other-origin cookies into the cache
-    file. Best-effort: silently no-ops on directory or write failure."""
-    cache_path = _nepu_cache_path()
+def _nepu_save_session_to(path, cookies, user_agent):
+    """Atomic-replace write of a session payload to a specific path.
+
+    Filters cookies to the nepu.to domain on the way in -- the cache files
+    are consumed by WhyKnot.dev's MediaProxy which expects nepu.to scoped
+    cookies (cf_clearance, PHPSESSID). Best-effort: silently no-ops on
+    directory or write failure.
+
+    Lifted out of _nepu_save_session so the same atomic write can mirror
+    the session under multiple host-keyed filenames (nepu.to and the
+    segment-CDN apex) without duplication.
+    """
     try:
-        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
     except OSError:
         return
 
@@ -176,7 +183,7 @@ def _nepu_save_session(cookies, user_agent):
     if not filtered:
         return
 
-    tmp_path = cache_path + '.tmp'
+    tmp_path = path + '.tmp'
     try:
         with open(tmp_path, 'w', encoding='utf-8') as f:
             json.dump({
@@ -184,10 +191,46 @@ def _nepu_save_session(cookies, user_agent):
                 'user_agent': user_agent or '',
                 'cookies': filtered,
             }, f)
-        os.replace(tmp_path, cache_path)
+        os.replace(tmp_path, path)
     except OSError:
         try: os.unlink(tmp_path)
         except OSError: pass
+
+
+def _nepu_save_session(cookies, user_agent):
+    """Atomically persist the canonical nepu.to session payload."""
+    _nepu_save_session_to(_nepu_cache_path(), cookies, user_agent)
+
+
+def _nepu_cdn_apex_path(m3u8_url):
+    """Resolve <state>/upstream_session/<cdn-apex>.json from the m3u8 URL.
+
+    Returns None when the m3u8 host equals nepu.to (the segment is served
+    from the origin, not a third-party CDN), when the host has fewer than
+    two dotted labels, or when the URL fails to parse. The apex is the
+    last two labels of the host -- e.g. 'vox-xov-cdn-8.nephinia-cdn.com'
+    -> 'nephinia-cdn.com'.
+
+    WhyKnot.dev's UpstreamSessionFileStore looks up sessions by host with
+    an apex fallback, so writing the apex file covers any subdomain the
+    CDN rotates the segment URLs through without us having to enumerate
+    each one. Layered alongside the canonical nepu.to.json -- not a
+    replacement for it.
+    """
+    try:
+        from urllib.parse import urlparse
+        host = (urlparse(m3u8_url).hostname or '').lower()
+    except (TypeError, ValueError):
+        return None
+    if not host or host == _CACHE_HOST:
+        return None
+    labels = host.split('.')
+    if len(labels) < 2:
+        return None
+    apex = labels[-2] + '.' + labels[-1]
+    if apex == _CACHE_HOST:
+        return None
+    return os.path.join(_nepu_cache_dir(), _CACHE_SUBDIR, apex + '.json')
 
 
 def _nepu_invalidate_cache():
@@ -414,6 +457,14 @@ class _NepuResolverMixin:
         if not m3u8_url:
             raise ExtractorError(
                 'Unable to extract m3u8 URL from embed response', expected=True)
+        # Mirror the session under the segment-CDN apex so MediaProxy can
+        # find the cookies when it fetches segments from a CDN subdomain
+        # (e.g. vox-xov-cdn-8.nephinia-cdn.com). The lookup on the server
+        # side falls back from the exact host to the apex; this call writes
+        # the apex file. No-op when the m3u8 host is nepu.to itself.
+        cdn_apex_path = _nepu_cdn_apex_path(m3u8_url)
+        if cdn_apex_path:
+            _nepu_save_session_to(cdn_apex_path, cookies, user_agent)
         cookie_header = self._nepu_format_cookie_header(
             [c for c in cookies if 'nepu.to' in (c.get('domain') or '')])
         return page_html, m3u8_url, user_agent, cookie_header
@@ -442,6 +493,12 @@ class _NepuResolverMixin:
             raise ExtractorError(
                 'No m3u8 in cached-session embed response (session likely stale)',
                 expected=True)
+        # Mirror to the CDN apex on the cached-session path too. The
+        # segment host can rotate independently of the nepu.to session
+        # cookies, so each resolve writes the apex file fresh.
+        cdn_apex_path = _nepu_cdn_apex_path(m3u8_url)
+        if cdn_apex_path:
+            _nepu_save_session_to(cdn_apex_path, cookies, user_agent)
         cookie_header = self._nepu_format_cookie_header(cookies)
         return page_html, m3u8_url, user_agent, cookie_header
 

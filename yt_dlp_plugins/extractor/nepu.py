@@ -426,48 +426,75 @@ class _NepuResolverMixin:
                         f'nepu cached session failed ({str(e)[:160]}); refreshing via bypass')
                     _nepu_invalidate_cache()
 
-        # Slow path: bypass refresh.
-        if fs_base:
-            page_html, cookies, user_agent = self._nepu_fetch_via_bypass(
-                fs_base, url, video_id)
-            self._nepu_inject_cookies(cookies)
-            _nepu_save_session(cookies, user_agent)
-        else:
-            page_html = self._download_webpage(url, video_id)
-            cookies = []
-            user_agent = ''
+        # Slow path: bypass refresh. Single retry to tolerate Byparr's
+        # Camoufox crashing mid-solve and returning a degraded cf_clearance
+        # cookie -- the homepage GET succeeds but the /ajax/embed POST
+        # subsequently 403s on the stricter bot-score gate. The watchdog
+        # restarts byparr on persistent failure, but a transient mid-solve
+        # crash often clears on the very next request because Express
+        # respawns the browser context. One retry covers that window
+        # without doubling solve cost on the happy path.
+        last_err = None
+        for attempt in (1, 2):
+            try:
+                if fs_base:
+                    page_html, cookies, user_agent = self._nepu_fetch_via_bypass(
+                        fs_base, url, video_id)
+                    self._nepu_inject_cookies(cookies)
+                    _nepu_save_session(cookies, user_agent)
+                else:
+                    page_html = self._download_webpage(url, video_id)
+                    cookies = []
+                    user_agent = ''
 
-        m = _DATA_EMBED_RE.search(page_html)
-        if not m:
-            # The page rendered fine but has no video element. Most common cause
-            # is a URL that's missing the trailing numeric ID (e.g.
-            # /movie/night-of-the-living-dead-1968 instead of
-            # /movie/night-of-the-living-dead-1968-1968-177219) -- the site
-            # redirects to /movie/- and serves a generic shell page. Surface
-            # that hint instead of a generic "no data-embed" message.
-            hint = ''
-            if 'canonical' in page_html and 'movie/-' in page_html:
-                hint = (' (page canonical is /movie/-, so the URL did not match a'
-                        ' catalog entry -- check the slug and trailing numeric id)')
-            raise ExtractorError(
-                f'Unable to find embed id (data-embed) in page{hint}', expected=True)
-        embed_id = m.group(1)
-        embed_html = self._nepu_post_embed(url, video_id, embed_id, user_agent)
-        m3u8_url = self._nepu_parse_m3u8_url(embed_html)
-        if not m3u8_url:
-            raise ExtractorError(
-                'Unable to extract m3u8 URL from embed response', expected=True)
-        # Mirror the session under the segment-CDN apex so MediaProxy can
-        # find the cookies when it fetches segments from a CDN subdomain
-        # (e.g. vox-xov-cdn-8.nephinia-cdn.com). The lookup on the server
-        # side falls back from the exact host to the apex; this call writes
-        # the apex file. No-op when the m3u8 host is nepu.to itself.
-        cdn_apex_path = _nepu_cdn_apex_path(m3u8_url)
-        if cdn_apex_path:
-            _nepu_save_session_to(cdn_apex_path, cookies, user_agent)
-        cookie_header = self._nepu_format_cookie_header(
-            [c for c in cookies if 'nepu.to' in (c.get('domain') or '')])
-        return page_html, m3u8_url, user_agent, cookie_header
+                m = _DATA_EMBED_RE.search(page_html)
+                if not m:
+                    # The page rendered fine but has no video element. Most common cause
+                    # is a URL that's missing the trailing numeric ID (e.g.
+                    # /movie/night-of-the-living-dead-1968 instead of
+                    # /movie/night-of-the-living-dead-1968-1968-177219) -- the site
+                    # redirects to /movie/- and serves a generic shell page. Surface
+                    # that hint instead of a generic "no data-embed" message.
+                    hint = ''
+                    if 'canonical' in page_html and 'movie/-' in page_html:
+                        hint = (' (page canonical is /movie/-, so the URL did not match a'
+                                ' catalog entry -- check the slug and trailing numeric id)')
+                    raise ExtractorError(
+                        f'Unable to find embed id (data-embed) in page{hint}', expected=True)
+                embed_id = m.group(1)
+                embed_html = self._nepu_post_embed(url, video_id, embed_id, user_agent)
+                m3u8_url = self._nepu_parse_m3u8_url(embed_html)
+                if not m3u8_url:
+                    raise ExtractorError(
+                        'Unable to extract m3u8 URL from embed response', expected=True)
+                # Mirror the session under the segment-CDN apex so MediaProxy can
+                # find the cookies when it fetches segments from a CDN subdomain
+                # (e.g. vox-xov-cdn-8.nephinia-cdn.com). The lookup on the server
+                # side falls back from the exact host to the apex; this call writes
+                # the apex file. No-op when the m3u8 host is nepu.to itself.
+                cdn_apex_path = _nepu_cdn_apex_path(m3u8_url)
+                if cdn_apex_path:
+                    _nepu_save_session_to(cdn_apex_path, cookies, user_agent)
+                cookie_header = self._nepu_format_cookie_header(
+                    [c for c in cookies if 'nepu.to' in (c.get('domain') or '')])
+                return page_html, m3u8_url, user_agent, cookie_header
+            except ExtractorError as e:
+                last_err = e
+                if attempt < 2 and fs_base:
+                    # Wipe the saved session so the retry can't read a
+                    # degraded cf_clearance we just persisted, and let
+                    # any partially-mutated cookiejar entries get
+                    # overwritten by the fresh solve.
+                    _nepu_invalidate_cache()
+                    self.report_warning(
+                        f'nepu bypass attempt {attempt} failed ({str(e)[:160]});'
+                        ' retrying with fresh solve')
+                else:
+                    raise
+        # Loop either returns on success or re-raises on the second
+        # ExtractorError; this final raise satisfies type-checkers that
+        # otherwise see a fall-through path with no return.
+        raise last_err  # pragma: no cover
 
     def _nepu_resolve_with_cached_session(self, url, video_id, cookies, user_agent):
         """Cached-session fast path. Raises ExtractorError on any failure

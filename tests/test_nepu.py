@@ -509,6 +509,110 @@ def test_bypass_url_trailing_slash_tolerated(monkeypatch):
     assert captured['bypass_call']['url'] == 'http://byparr:8191/v1'
 
 
+def test_bypass_slow_path_retries_after_embed_post_failure(monkeypatch, tmp_path):
+    # Byparr/Camoufox occasionally crashes its browser context mid-solve and
+    # returns a degraded cf_clearance: the homepage GET passes, but the
+    # /ajax/embed POST 403s on the stricter bot-score gate. The slow path
+    # must retry once with a fresh solve before giving up. A real-world
+    # transient crash usually clears on the next /v1 because Express
+    # respawns the browser context.
+    from yt_dlp_plugins.extractor.nepu import _CACHE_FILENAME, _CACHE_SUBDIR
+    monkeypatch.setenv(_BYPASS_ENV, 'http://byparr:8191')
+    monkeypatch.setenv(_CACHE_DIR_ENV, str(tmp_path))
+
+    ydl = YoutubeDL({'quiet': True, 'no_warnings': True, 'skip_download': True})
+    ie = NepuMovieIE(ydl)
+
+    captured = {'bypass_calls': 0, 'embed_calls': 0}
+
+    def fake_download_json(url_or_request, video_id, *args, **kwargs):
+        captured['bypass_calls'] += 1
+        return {
+            'status': 'ok',
+            'solution': {
+                'response': _MOVIE_HTML,
+                'cookies': [
+                    {'name': 'cf_clearance', 'value': f'fresh-{captured["bypass_calls"]}',
+                     'domain': '.nepu.to', 'path': '/'},
+                ],
+                'userAgent': 'UA-test',
+            },
+        }
+
+    def fake_download_webpage(url_or_request, video_id, *args, **kwargs):
+        url = url_or_request if isinstance(url_or_request, str) else url_or_request.url
+        if _EMBED_API in url:
+            captured['embed_calls'] += 1
+            if captured['embed_calls'] == 1:
+                # Simulate the 403 the degraded cf_clearance produces.
+                from yt_dlp.utils import ExtractorError as _ExtractorError
+                raise _ExtractorError('Stream resolution failed: HTTP Error 403: Forbidden',
+                                      expected=True)
+            return _EMBED_RESPONSE
+        # Page GET (non-bypass path) should not be hit; bypass returns the HTML.
+        return _MOVIE_HTML
+
+    ie._download_json = fake_download_json  # type: ignore[assignment]
+    ie._download_webpage = fake_download_webpage  # type: ignore[assignment]
+
+    info = ie._real_extract('https://nepu.to/movie/synthetic-movie-1')
+
+    # Two bypass /v1 calls: first produced the degraded session, second was
+    # the retry that succeeded.
+    assert captured['bypass_calls'] == 2
+    # Two embed POSTs: the first 403'd, the retry succeeded.
+    assert captured['embed_calls'] == 2
+    # Final info dict carries the resolved m3u8.
+    assert info['url'] == _FIXTURE_M3U8
+    # Cache should now contain the SECOND (fresh-2) solve, not the failed first one.
+    cache_path = tmp_path / _CACHE_SUBDIR / _CACHE_FILENAME
+    assert cache_path.exists()
+    payload = json.loads(cache_path.read_text(encoding='utf-8'))
+    saved_cf = next(c['value'] for c in payload['cookies']
+                    if c.get('name') == 'cf_clearance')
+    assert saved_cf == 'fresh-2'
+
+
+def test_bypass_slow_path_gives_up_after_second_failure(monkeypatch, tmp_path):
+    # Two failures in a row indicate something more than a transient
+    # browser-context crash. The extractor must surface the failure rather
+    # than retrying indefinitely.
+    monkeypatch.setenv(_BYPASS_ENV, 'http://byparr:8191')
+    monkeypatch.setenv(_CACHE_DIR_ENV, str(tmp_path))
+
+    ydl = YoutubeDL({'quiet': True, 'no_warnings': True, 'skip_download': True})
+    ie = NepuMovieIE(ydl)
+    captured = {'bypass_calls': 0, 'embed_calls': 0}
+
+    def fake_download_json(url_or_request, video_id, *args, **kwargs):
+        captured['bypass_calls'] += 1
+        return {'status': 'ok', 'solution': {
+            'response': _MOVIE_HTML,
+            'cookies': [{'name': 'cf_clearance', 'value': 'degraded',
+                         'domain': '.nepu.to', 'path': '/'}],
+            'userAgent': 'UA',
+        }}
+
+    def fake_download_webpage(url_or_request, video_id, *args, **kwargs):
+        url = url_or_request if isinstance(url_or_request, str) else url_or_request.url
+        if _EMBED_API in url:
+            captured['embed_calls'] += 1
+            from yt_dlp.utils import ExtractorError as _ExtractorError
+            raise _ExtractorError('Stream resolution failed: HTTP Error 403',
+                                  expected=True)
+        return _MOVIE_HTML
+
+    ie._download_json = fake_download_json  # type: ignore[assignment]
+    ie._download_webpage = fake_download_webpage  # type: ignore[assignment]
+
+    with pytest.raises(Exception) as excinfo:
+        ie._real_extract('https://nepu.to/movie/synthetic-movie-1')
+    assert '403' in str(excinfo.value)
+    # Exactly two attempts; not a third.
+    assert captured['bypass_calls'] == 2
+    assert captured['embed_calls'] == 2
+
+
 # ---------------------------------------------------------------------------
 # Lower-level regex sanity for the m3u8 path extraction.
 # ---------------------------------------------------------------------------

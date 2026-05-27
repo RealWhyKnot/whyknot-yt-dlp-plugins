@@ -11,8 +11,8 @@ zip + indented-inner-files layout.
 Section order (matches WKVRCProxy):
 
   1. Title (h1: "<repo> <tag>")
-  2. What's Changed (auto-changelog from the commit slice between prev tag
-     and this tag; bucketed by conventional-commit prefix)
+  2. What's Changed (auto-changelog from the commit slice between the release
+     base and this tag; bucketed by conventional-commit prefix)
   3. File integrity (wheel + sdist with size and SHA256)
   4. More (from .github/release-template/links.md, with token substitution)
   5. Install (from .github/release-template/install.md)
@@ -21,11 +21,14 @@ Section order (matches WKVRCProxy):
   8. Optional extras (from .github/release-extras/<tag>.md if present;
      appended below with --- separator and ## Additional notes heading)
 
-Slice composition: walks commits between prev tag and current tag. Skips
-merge commits and commits containing "[skip changelog]". Strips trailing
-version-stamp noise of the form " (YYYY.M.D.N)" that some commit messages
-append to subjects. Groups by conventional-commit prefix when at least one
-entry has one, otherwise emits a flat bullet list.
+Slice composition: walks commits between the release base and current tag.
+Stable release tags use the previous stable tag as their base, so any beta
+notes since the last stable release are included in the stable release body.
+Beta and dev tags keep using the nearest previous tag. Skips merge commits
+and commits containing "[skip changelog]". Strips trailing version-stamp noise
+of the form " (YYYY.M.D.N)" that some commit messages append to subjects.
+Groups by conventional-commit prefix when at least one entry has one,
+otherwise emits a flat bullet list.
 
 Prev-tag resolution is layered for resilience against history rewrites that
 orphan the prior tag (rebase + force-push of main): describe + sanity gate,
@@ -86,6 +89,7 @@ AUTHOR_HANDLE_MAP = {"WhyKnot": "RealWhyKnot"}
 
 VERSION_STAMP_RE = re.compile(r"\s*\(\d{4}\.\d+\.\d+\.\d+(?:-[A-Fa-f0-9]+)?\)\s*")
 WHITESPACE_RE = re.compile(r"\s{2,}")
+PRERELEASE_TAG_RE = re.compile(r"^v?\d{4}\.\d+\.\d+\.\d+-.+")
 
 # ASCII normalisation table. Applied silently before the strict scrub.
 ASCII_SUBS = {
@@ -157,10 +161,18 @@ def run_gh(*args: str) -> tuple[int, str]:
     return p.returncode, (p.stdout or "").strip()
 
 
+def is_prerelease_tag(tag: str) -> bool:
+    return bool(PRERELEASE_TAG_RE.match(tag))
+
+
 def resolve_prev_tag(tag: str, repo: str | None) -> dict:
     """Return {tag, log_args, display, source} for the slice anchor."""
     # Layer 1: describe + 50-commit sanity gate.
-    rc, prev_ref = run_git("describe", "--tags", "--abbrev=0", f"{tag}^")
+    describe_args = ["describe", "--tags", "--abbrev=0"]
+    if not is_prerelease_tag(tag):
+        describe_args.extend(["--exclude", "*-*"])
+    describe_args.append(f"{tag}^")
+    rc, prev_ref = run_git(*describe_args)
     if rc == 0 and prev_ref:
         prev_tag = prev_ref
         rc2, count = run_git("rev-list", "--count", f"{prev_tag}..{tag}")

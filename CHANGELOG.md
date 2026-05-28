@@ -9,8 +9,13 @@ release versioning where N is the daily build counter starting at 0).
 ## Unreleased
 
 
+
+### Changed
+- Split nepu extractor tests by behavior (17aa5ac)
+
 ### Fixed
 - **nepu:** Mirror session under segment CDN apex (aadcb84)
+- **nepu:** Retry slow-path once on bypass failure (54b75dd)
 
 ---
 

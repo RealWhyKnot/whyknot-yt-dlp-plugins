@@ -20,15 +20,17 @@ class WhyKnotPluginPlaceholderIE(InfoExtractor):
     IE_NAME = "whyknot:placeholder"
     IE_DESC = "WhyKnot plugin discovery sentinel"
     _VALID_URL = r"https?://plugin-test\.whyknot\.dev/test/(?P<id>[A-Za-z0-9_-]+)"
-    _TESTS = [{
-        "url": "https://plugin-test.whyknot.dev/test/sample",
-        "info_dict": {
-            "id": "sample",
-            "title": "WhyKnot Plugin Loaded",
-            "ext": "mp4",
-        },
-        "params": {"skip_download": True},
-    }]
+    _TESTS = [
+        {
+            "url": "https://plugin-test.whyknot.dev/test/sample",
+            "info_dict": {
+                "id": "sample",
+                "title": "WhyKnot Plugin Loaded",
+                "ext": "mp4",
+            },
+            "params": {"skip_download": True},
+        }
+    ]
 
     def _real_extract(self, url):
         video_id = self._match_id(url)

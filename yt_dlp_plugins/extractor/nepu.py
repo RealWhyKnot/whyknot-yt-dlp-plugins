@@ -67,11 +67,10 @@ from yt_dlp.utils import (
     unified_strdate,
 )
 
-
 # Env var the bypass service URL is read from. The name is FlareSolverr-
 # shaped for compatibility -- any service that speaks the FlareSolverr
 # POST /v1 wire (e.g. Byparr, stock FlareSolverr) works here.
-_BYPASS_ENV = 'WHYKNOT_FLARESOLVERR_URL'
+_BYPASS_ENV = "WHYKNOT_FLARESOLVERR_URL"
 # In-payload solver budget. FlareSolverr reads this as milliseconds,
 # Byparr as seconds. We split the difference by sending the largest
 # value that is still sane in either unit: 30000 means "30 s" to
@@ -97,16 +96,16 @@ _BYPASS_HTTP_TIMEOUT = 60
 # it needs the same session for its own upstream fetches -- the
 # extractor and the proxy share a single source of truth on disk, no
 # IPC between them.
-_CACHE_SUBDIR = 'upstream_session'
-_CACHE_HOST = 'nepu.to'
-_CACHE_FILENAME = _CACHE_HOST + '.json'
+_CACHE_SUBDIR = "upstream_session"
+_CACHE_HOST = "nepu.to"
+_CACHE_FILENAME = _CACHE_HOST + ".json"
 _CACHE_TTL_SECONDS = 30 * 60
 # Override for the cache directory. Defaults to /app/state (the WhyKnot.dev
 # deployment, where /var/lib/whyknot/state is bind-mounted) and falls back
 # to a per-user temp dir for everyone else.
-_CACHE_DIR_ENV = 'WHYKNOT_PLUGIN_STATE_DIR'
+_CACHE_DIR_ENV = "WHYKNOT_PLUGIN_STATE_DIR"
 
-_EMBED_API = 'https://nepu.to/ajax/embed'
+_EMBED_API = "https://nepu.to/ajax/embed"
 _DATA_EMBED_RE = re.compile(r'data-embed="(\d+)"')
 _PLAYERJS_FILE_RE = re.compile(r'"file"\s*:\s*"([^"]+\.m3u8)"')
 
@@ -121,9 +120,9 @@ def _nepu_cache_dir():
     override = os.environ.get(_CACHE_DIR_ENV)
     if override:
         return override
-    if os.path.isdir('/app/state'):
-        return '/app/state'
-    return os.path.join(tempfile.gettempdir(), 'whyknot-yt-dlp-plugins')
+    if os.path.isdir("/app/state"):
+        return "/app/state"
+    return os.path.join(tempfile.gettempdir(), "whyknot-yt-dlp-plugins")
 
 
 def _nepu_cache_path():
@@ -138,12 +137,12 @@ def _nepu_load_cached_session():
     later cookie-string formatter doesn't have to re-filter.
     """
     try:
-        with open(_nepu_cache_path(), 'r', encoding='utf-8') as f:
+        with open(_nepu_cache_path(), encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
         return None
 
-    saved_at = data.get('saved_at', 0)
+    saved_at = data.get("saved_at", 0)
     try:
         saved_at = float(saved_at)
     except (TypeError, ValueError):
@@ -151,13 +150,12 @@ def _nepu_load_cached_session():
     if time.time() - saved_at > _CACHE_TTL_SECONDS:
         return None
 
-    cookies = [c for c in (data.get('cookies') or [])
-               if isinstance(c, dict) and 'nepu.to' in (c.get('domain') or '')]
+    cookies = [c for c in (data.get("cookies") or []) if isinstance(c, dict) and "nepu.to" in (c.get("domain") or "")]
     # cf_clearance is the gate. Without it the cached session is useless.
-    if not any(c.get('name') == 'cf_clearance' for c in cookies):
+    if not any(c.get("name") == "cf_clearance" for c in cookies):
         return None
 
-    ua = data.get('user_agent') or ''
+    ua = data.get("user_agent") or ""
     return cookies, ua
 
 
@@ -178,23 +176,27 @@ def _nepu_save_session_to(path, cookies, user_agent):
     except OSError:
         return
 
-    filtered = [c for c in (cookies or [])
-                if isinstance(c, dict) and 'nepu.to' in (c.get('domain') or '')]
+    filtered = [c for c in (cookies or []) if isinstance(c, dict) and "nepu.to" in (c.get("domain") or "")]
     if not filtered:
         return
 
-    tmp_path = path + '.tmp'
+    tmp_path = path + ".tmp"
     try:
-        with open(tmp_path, 'w', encoding='utf-8') as f:
-            json.dump({
-                'saved_at': int(time.time()),
-                'user_agent': user_agent or '',
-                'cookies': filtered,
-            }, f)
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "saved_at": int(time.time()),
+                    "user_agent": user_agent or "",
+                    "cookies": filtered,
+                },
+                f,
+            )
         os.replace(tmp_path, path)
     except OSError:
-        try: os.unlink(tmp_path)
-        except OSError: pass
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 def _nepu_save_session(cookies, user_agent):
@@ -219,18 +221,19 @@ def _nepu_cdn_apex_path(m3u8_url):
     """
     try:
         from urllib.parse import urlparse
-        host = (urlparse(m3u8_url).hostname or '').lower()
+
+        host = (urlparse(m3u8_url).hostname or "").lower()
     except (TypeError, ValueError):
         return None
     if not host or host == _CACHE_HOST:
         return None
-    labels = host.split('.')
+    labels = host.split(".")
     if len(labels) < 2:
         return None
-    apex = labels[-2] + '.' + labels[-1]
+    apex = labels[-2] + "." + labels[-1]
     if apex == _CACHE_HOST:
         return None
-    return os.path.join(_nepu_cache_dir(), _CACHE_SUBDIR, apex + '.json')
+    return os.path.join(_nepu_cache_dir(), _CACHE_SUBDIR, apex + ".json")
 
 
 def _nepu_invalidate_cache():
@@ -241,6 +244,7 @@ def _nepu_invalidate_cache():
     except OSError:
         pass
 
+
 # og:title on nepu is marketing copy, not the canonical title. Two shapes
 # observed in the wild:
 #   "Watch <Title> (<Year>) Free Online in HD"          -- movies
@@ -249,9 +253,9 @@ def _nepu_invalidate_cache():
 # suffix. The h1 carries the clean title ("<Title> (<Year>)") and is
 # preferred; this regex pair is the fallback for the rare page where h1
 # is missing.
-_OG_TITLE_PREFIX_RE = re.compile(r'^\s*Watch\s+', re.IGNORECASE)
+_OG_TITLE_PREFIX_RE = re.compile(r"^\s*Watch\s+", re.IGNORECASE)
 _OG_TITLE_SUFFIX_RE = re.compile(
-    r'\s+(?:Shows?\s*&\s*Cartoons?\s+)?Free(?:\s+Online)?\s+in\s+HD\s*$',
+    r"\s+(?:Shows?\s*&\s*Cartoons?\s+)?Free(?:\s+Online)?\s+in\s+HD\s*$",
     re.IGNORECASE,
 )
 
@@ -259,8 +263,8 @@ _OG_TITLE_SUFFIX_RE = re.compile(
 def _strip_og_title_marketing(title):
     if not title:
         return title
-    title = _OG_TITLE_PREFIX_RE.sub('', title)
-    title = _OG_TITLE_SUFFIX_RE.sub('', title)
+    title = _OG_TITLE_PREFIX_RE.sub("", title)
+    title = _OG_TITLE_SUFFIX_RE.sub("", title)
     return title.strip() or None
 
 
@@ -274,12 +278,14 @@ class _NepuResolverMixin:
 
     def _nepu_fetch_via_bypass(self, fs_base, url, video_id):
         """Drive the FlareSolverr-compatible bypass to get HTML + cookies + UA."""
-        fs_endpoint = fs_base.rstrip('/') + '/v1'
-        payload = json.dumps({
-            'cmd': 'request.get',
-            'url': url,
-            'maxTimeout': _BYPASS_MAX_TIMEOUT,
-        }).encode('utf-8')
+        fs_endpoint = fs_base.rstrip("/") + "/v1"
+        payload = json.dumps(
+            {
+                "cmd": "request.get",
+                "url": url,
+                "maxTimeout": _BYPASS_MAX_TIMEOUT,
+            }
+        ).encode("utf-8")
         # Pre-build the Request so we can attach a longer per-request
         # socket timeout via extensions. yt-dlp's networking layer
         # honours extensions['timeout'] and merges it with the global
@@ -287,30 +293,28 @@ class _NepuResolverMixin:
         req = Request(
             fs_endpoint,
             data=payload,
-            headers={'Content-Type': 'application/json'},
-            method='POST',
-            extensions={'timeout': _BYPASS_HTTP_TIMEOUT},
+            headers={"Content-Type": "application/json"},
+            method="POST",
+            extensions={"timeout": _BYPASS_HTTP_TIMEOUT},
         )
         resp = self._download_json(
-            req, video_id,
-            note='Fetching page via bypass service',
-            errnote='Bypass service request failed')
+            req, video_id, note="Fetching page via bypass service", errnote="Bypass service request failed"
+        )
 
-        if not isinstance(resp, dict) or resp.get('status') != 'ok':
-            message = resp.get('message') if isinstance(resp, dict) else None
+        if not isinstance(resp, dict) or resp.get("status") != "ok":
+            message = resp.get("message") if isinstance(resp, dict) else None
             raise ExtractorError(
-                f'Bypass service did not return ok status: {message or "unknown error"}',
-                expected=True)
+                f"Bypass service did not return ok status: {message or 'unknown error'}", expected=True
+            )
 
-        solution = resp.get('solution') or {}
-        page_html = solution.get('response') or ''
+        solution = resp.get("solution") or {}
+        page_html = solution.get("response") or ""
         if not page_html:
-            raise ExtractorError(
-                'Bypass response missing solution body', expected=True)
+            raise ExtractorError("Bypass response missing solution body", expected=True)
         return (
             page_html,
-            solution.get('cookies') or [],
-            solution.get('userAgent') or solution.get('user_agent') or '',
+            solution.get("cookies") or [],
+            solution.get("userAgent") or solution.get("user_agent") or "",
         )
 
     def _nepu_inject_cookies(self, cookies):
@@ -326,24 +330,32 @@ class _NepuResolverMixin:
         except AttributeError:
             return
         for c in cookies:
-            name = c.get('name')
-            domain = c.get('domain') or ''
-            if not name or 'nepu.to' not in domain:
+            name = c.get("name")
+            domain = c.get("domain") or ""
+            if not name or "nepu.to" not in domain:
                 continue
-            expires = c.get('expires')
+            expires = c.get("expires")
             try:
                 expires = int(expires) if expires and float(expires) > 0 else None
             except (TypeError, ValueError):
                 expires = None
             ck = http.cookiejar.Cookie(
-                version=0, name=name, value=c.get('value', ''),
-                port=None, port_specified=False,
-                domain=domain, domain_specified=True,
-                domain_initial_dot=domain.startswith('.'),
-                path=c.get('path', '/'), path_specified=True,
-                secure=bool(c.get('secure', False)),
+                version=0,
+                name=name,
+                value=c.get("value", ""),
+                port=None,
+                port_specified=False,
+                domain=domain,
+                domain_specified=True,
+                domain_initial_dot=domain.startswith("."),
+                path=c.get("path", "/"),
+                path_specified=True,
+                secure=bool(c.get("secure", False)),
                 expires=expires,
-                discard=False, comment=None, comment_url=None, rest={},
+                discard=False,
+                comment=None,
+                comment_url=None,
+                rest={},
                 rfc2109=False,
             )
             jar.set_cookie(ck)
@@ -351,30 +363,29 @@ class _NepuResolverMixin:
     @staticmethod
     def _nepu_format_cookie_header(cookies):
         if not cookies:
-            return ''
-        return '; '.join(
-            f"{c['name']}={c['value']}" for c in cookies
-            if c.get('name') and c.get('value') is not None
-        )
+            return ""
+        return "; ".join(f"{c['name']}={c['value']}" for c in cookies if c.get("name") and c.get("value") is not None)
 
     def _nepu_post_embed(self, url, video_id, embed_id, user_agent):
         """POST /ajax/embed and return the response body. Cookies must already
         be in yt-dlp's cookiejar (caller is responsible)."""
         post_headers = {
-            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-            'X-Requested-With': 'XMLHttpRequest',
-            'Origin': 'https://nepu.to',
-            'Referer': url,
-            'Accept': '*/*',
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "X-Requested-With": "XMLHttpRequest",
+            "Origin": "https://nepu.to",
+            "Referer": url,
+            "Accept": "*/*",
         }
         if user_agent:
-            post_headers['User-Agent'] = user_agent
+            post_headers["User-Agent"] = user_agent
         return self._download_webpage(
-            _EMBED_API, video_id,
-            data=urllib.parse.urlencode({'id': embed_id}).encode(),
+            _EMBED_API,
+            video_id,
+            data=urllib.parse.urlencode({"id": embed_id}).encode(),
             headers=post_headers,
-            note='Resolving stream via /ajax/embed',
-            errnote='Stream resolution failed')
+            note="Resolving stream via /ajax/embed",
+            errnote="Stream resolution failed",
+        )
 
     @staticmethod
     def _nepu_parse_m3u8_url(embed_html):
@@ -382,8 +393,8 @@ class _NepuResolverMixin:
         if not mm:
             return None
         m3u8_url = mm.group(1)
-        if m3u8_url.startswith('/'):
-            m3u8_url = 'https://nepu.to' + m3u8_url
+        if m3u8_url.startswith("/"):
+            m3u8_url = "https://nepu.to" + m3u8_url
         return m3u8_url
 
     def _nepu_resolve(self, url, video_id):
@@ -416,14 +427,12 @@ class _NepuResolverMixin:
             cached = _nepu_load_cached_session()
             if cached:
                 try:
-                    return self._nepu_resolve_with_cached_session(
-                        url, video_id, cached[0], cached[1])
+                    return self._nepu_resolve_with_cached_session(url, video_id, cached[0], cached[1])
                 except ExtractorError as e:
                     # Anything goes wrong with the cached path -- expired
                     # cookies, IP rotation, server-side session purge --
                     # we invalidate and refresh via the bypass.
-                    self.report_warning(
-                        f'nepu cached session failed ({str(e)[:160]}); refreshing via bypass')
+                    self.report_warning(f"nepu cached session failed ({str(e)[:160]}); refreshing via bypass")
                     _nepu_invalidate_cache()
 
         # Slow path: bypass refresh. Single retry to tolerate Byparr's
@@ -438,14 +447,13 @@ class _NepuResolverMixin:
         for attempt in (1, 2):
             try:
                 if fs_base:
-                    page_html, cookies, user_agent = self._nepu_fetch_via_bypass(
-                        fs_base, url, video_id)
+                    page_html, cookies, user_agent = self._nepu_fetch_via_bypass(fs_base, url, video_id)
                     self._nepu_inject_cookies(cookies)
                     _nepu_save_session(cookies, user_agent)
                 else:
                     page_html = self._download_webpage(url, video_id)
                     cookies = []
-                    user_agent = ''
+                    user_agent = ""
 
                 m = _DATA_EMBED_RE.search(page_html)
                 if not m:
@@ -455,18 +463,18 @@ class _NepuResolverMixin:
                     # /movie/night-of-the-living-dead-1968-1968-177219) -- the site
                     # redirects to /movie/- and serves a generic shell page. Surface
                     # that hint instead of a generic "no data-embed" message.
-                    hint = ''
-                    if 'canonical' in page_html and 'movie/-' in page_html:
-                        hint = (' (page canonical is /movie/-, so the URL did not match a'
-                                ' catalog entry -- check the slug and trailing numeric id)')
-                    raise ExtractorError(
-                        f'Unable to find embed id (data-embed) in page{hint}', expected=True)
+                    hint = ""
+                    if "canonical" in page_html and "movie/-" in page_html:
+                        hint = (
+                            " (page canonical is /movie/-, so the URL did not match a"
+                            " catalog entry -- check the slug and trailing numeric id)"
+                        )
+                    raise ExtractorError(f"Unable to find embed id (data-embed) in page{hint}", expected=True)
                 embed_id = m.group(1)
                 embed_html = self._nepu_post_embed(url, video_id, embed_id, user_agent)
                 m3u8_url = self._nepu_parse_m3u8_url(embed_html)
                 if not m3u8_url:
-                    raise ExtractorError(
-                        'Unable to extract m3u8 URL from embed response', expected=True)
+                    raise ExtractorError("Unable to extract m3u8 URL from embed response", expected=True)
                 # Mirror the session under the segment-CDN apex so MediaProxy can
                 # find the cookies when it fetches segments from a CDN subdomain
                 # (e.g. vox-xov-cdn-8.nephinia-cdn.com). The lookup on the server
@@ -476,7 +484,8 @@ class _NepuResolverMixin:
                 if cdn_apex_path:
                     _nepu_save_session_to(cdn_apex_path, cookies, user_agent)
                 cookie_header = self._nepu_format_cookie_header(
-                    [c for c in cookies if 'nepu.to' in (c.get('domain') or '')])
+                    [c for c in cookies if "nepu.to" in (c.get("domain") or "")]
+                )
                 return page_html, m3u8_url, user_agent, cookie_header
             except ExtractorError as e:
                 last_err = e
@@ -487,8 +496,8 @@ class _NepuResolverMixin:
                     # overwritten by the fresh solve.
                     _nepu_invalidate_cache()
                     self.report_warning(
-                        f'nepu bypass attempt {attempt} failed ({str(e)[:160]});'
-                        ' retrying with fresh solve')
+                        f"nepu bypass attempt {attempt} failed ({str(e)[:160]}); retrying with fresh solve"
+                    )
                 else:
                     raise
         # Loop either returns on success or re-raises on the second
@@ -500,26 +509,27 @@ class _NepuResolverMixin:
         """Cached-session fast path. Raises ExtractorError on any failure
         so the caller can invalidate and refresh."""
         self._nepu_inject_cookies(cookies)
-        page_headers = {'User-Agent': user_agent} if user_agent else None
+        page_headers = {"User-Agent": user_agent} if user_agent else None
         page_html = self._download_webpage(
-            url, video_id, headers=page_headers,
-            note='Fetching page (cached bypass session)',
-            errnote='Cached-session page fetch failed')
+            url,
+            video_id,
+            headers=page_headers,
+            note="Fetching page (cached bypass session)",
+            errnote="Cached-session page fetch failed",
+        )
 
         m = _DATA_EMBED_RE.search(page_html)
         if not m:
             # CF likely served the challenge page because cookies expired.
             raise ExtractorError(
-                'No data-embed in cached-session page response (cookies likely expired)',
-                expected=True)
+                "No data-embed in cached-session page response (cookies likely expired)", expected=True
+            )
         embed_id = m.group(1)
 
         embed_html = self._nepu_post_embed(url, video_id, embed_id, user_agent)
         m3u8_url = self._nepu_parse_m3u8_url(embed_html)
         if not m3u8_url:
-            raise ExtractorError(
-                'No m3u8 in cached-session embed response (session likely stale)',
-                expected=True)
+            raise ExtractorError("No m3u8 in cached-session embed response (session likely stale)", expected=True)
         # Mirror to the CDN apex on the cached-session path too. The
         # segment host can rotate independently of the nepu.to session
         # cookies, so each resolve writes the apex file fresh.
@@ -530,7 +540,7 @@ class _NepuResolverMixin:
         return page_html, m3u8_url, user_agent, cookie_header
 
 
-def _http_headers_for(url, user_agent, cookie_header=''):
+def _http_headers_for(url, user_agent, cookie_header=""):
     """Build the per-format http_headers dict the extractor returns.
 
     The Referer is always the page URL (the segment CDN whitelists referrers
@@ -540,103 +550,117 @@ def _http_headers_for(url, user_agent, cookie_header=''):
     Cookie carries cf_clearance + PHPSESSID so the m3u8 fetch validates
     server-side without a second bypass round-trip.
     """
-    headers = {'Referer': url}
+    headers = {"Referer": url}
     if user_agent:
-        headers['User-Agent'] = user_agent
+        headers["User-Agent"] = user_agent
     if cookie_header:
-        headers['Cookie'] = cookie_header
+        headers["Cookie"] = cookie_header
     return headers
 
 
 class NepuMovieIE(_NepuResolverMixin, InfoExtractor):
-    IE_NAME = 'whyknot:nepu:movie'
-    IE_DESC = 'nepu.to movies'
-    _VALID_URL = r'https?://(?:www\.)?nepu\.to/movie/(?P<id>[a-z0-9-]+)'
-    _TESTS = [{
-        'url': 'https://nepu.to/movie/night-of-the-living-dead-1968-1968-177219',
-        'info_dict': {
-            'id': 'night-of-the-living-dead-1968-1968-177219',
-            'ext': 'mp4',
-            'title': 'Night of the Living Dead (1968)',
-            'protocol': 'm3u8_native',
+    IE_NAME = "whyknot:nepu:movie"
+    IE_DESC = "nepu.to movies"
+    _VALID_URL = r"https?://(?:www\.)?nepu\.to/movie/(?P<id>[a-z0-9-]+)"
+    _TESTS = [
+        {
+            "url": "https://nepu.to/movie/night-of-the-living-dead-1968-1968-177219",
+            "info_dict": {
+                "id": "night-of-the-living-dead-1968-1968-177219",
+                "ext": "mp4",
+                "title": "Night of the Living Dead (1968)",
+                "protocol": "m3u8_native",
+            },
+            "params": {"skip_download": True},
         },
-        'params': {'skip_download': True},
-    }, {
-        'url': 'https://www.nepu.to/movie/sample-only-matching-0',
-        'only_matching': True,
-    }]
+        {
+            "url": "https://www.nepu.to/movie/sample-only-matching-0",
+            "only_matching": True,
+        },
+    ]
 
     def _real_extract(self, url):
         video_id = self._match_id(url)
         page_html, m3u8_url, user_agent, cookie_header = self._nepu_resolve(url, video_id)
 
-        title = self._html_search_regex(
-            r'<h1[^>]*>([^<]+)</h1>', page_html, 'title',
-            default=None, fatal=False)
+        title = self._html_search_regex(r"<h1[^>]*>([^<]+)</h1>", page_html, "title", default=None, fatal=False)
         if not title:
-            title = _strip_og_title_marketing(
-                self._og_search_title(page_html, default=None))
+            title = _strip_og_title_marketing(self._og_search_title(page_html, default=None))
         if not title:
-            raise ExtractorError('Unable to determine movie title', expected=True)
+            raise ExtractorError("Unable to determine movie title", expected=True)
 
         return {
-            'id': video_id,
-            'title': title.strip(),
-            'url': m3u8_url,
-            'ext': 'mp4',
-            'protocol': 'm3u8_native',
-            'http_headers': _http_headers_for(url, user_agent, cookie_header),
-            'description': self._og_search_description(page_html, default=None),
-            'thumbnail': self._og_search_thumbnail(page_html, default=None),
-            'release_date': unified_strdate(self._html_search_regex(
-                r'(?i)(?:release\s*date|released)[^<]*<[^>]+>\s*([0-9A-Za-z ,/-]+)',
-                page_html, 'release date', default=None, fatal=False)),
-            'duration': parse_duration(self._html_search_regex(
-                r'(?i)(?:duration|runtime)[^<]*<[^>]+>\s*([0-9hms :]+)',
-                page_html, 'duration', default=None, fatal=False)),
-            'average_rating': float_or_none(self._html_search_regex(
-                r'(?i)imdb[^<]*<[^>]+>\s*([0-9]+(?:\.[0-9]+)?)',
-                page_html, 'imdb rating', default=None, fatal=False)),
+            "id": video_id,
+            "title": title.strip(),
+            "url": m3u8_url,
+            "ext": "mp4",
+            "protocol": "m3u8_native",
+            "http_headers": _http_headers_for(url, user_agent, cookie_header),
+            "description": self._og_search_description(page_html, default=None),
+            "thumbnail": self._og_search_thumbnail(page_html, default=None),
+            "release_date": unified_strdate(
+                self._html_search_regex(
+                    r"(?i)(?:release\s*date|released)[^<]*<[^>]+>\s*([0-9A-Za-z ,/-]+)",
+                    page_html,
+                    "release date",
+                    default=None,
+                    fatal=False,
+                )
+            ),
+            "duration": parse_duration(
+                self._html_search_regex(
+                    r"(?i)(?:duration|runtime)[^<]*<[^>]+>\s*([0-9hms :]+)",
+                    page_html,
+                    "duration",
+                    default=None,
+                    fatal=False,
+                )
+            ),
+            "average_rating": float_or_none(
+                self._html_search_regex(
+                    r"(?i)imdb[^<]*<[^>]+>\s*([0-9]+(?:\.[0-9]+)?)", page_html, "imdb rating", default=None, fatal=False
+                )
+            ),
         }
 
 
 class NepuEpisodeIE(_NepuResolverMixin, InfoExtractor):
-    IE_NAME = 'whyknot:nepu:episode'
-    IE_DESC = 'nepu.to show episodes'
+    IE_NAME = "whyknot:nepu:episode"
+    IE_DESC = "nepu.to show episodes"
     _VALID_URL = (
-        r'https?://(?:www\.)?nepu\.to/show/'
-        r'(?P<show>[a-z0-9-]+)/season/(?P<season>\d+)/episode/(?P<episode>\d+)'
+        r"https?://(?:www\.)?nepu\.to/show/"
+        r"(?P<show>[a-z0-9-]+)/season/(?P<season>\d+)/episode/(?P<episode>\d+)"
     )
-    _TESTS = [{
-        'url': 'https://nepu.to/show/the-beverly-hillbillies-1962-1962-240081/season/1/episode/1',
-        'info_dict': {
-            'id': 'the-beverly-hillbillies-1962-1962-240081-s1e1',
-            'ext': 'mp4',
-            'series': 'The Beverly Hillbillies (1962)',
-            'season_number': 1,
-            'episode_number': 1,
-            'protocol': 'm3u8_native',
+    _TESTS = [
+        {
+            "url": "https://nepu.to/show/the-beverly-hillbillies-1962-1962-240081/season/1/episode/1",
+            "info_dict": {
+                "id": "the-beverly-hillbillies-1962-1962-240081-s1e1",
+                "ext": "mp4",
+                "series": "The Beverly Hillbillies (1962)",
+                "season_number": 1,
+                "episode_number": 1,
+                "protocol": "m3u8_native",
+            },
+            "params": {"skip_download": True},
         },
-        'params': {'skip_download': True},
-    }, {
-        'url': 'https://www.nepu.to/show/sample-only-matching-0/season/2/episode/12',
-        'only_matching': True,
-    }]
+        {
+            "url": "https://www.nepu.to/show/sample-only-matching-0/season/2/episode/12",
+            "only_matching": True,
+        },
+    ]
 
     def _real_extract(self, url):
         mobj = self._match_valid_url(url)
-        show_slug = mobj.group('show')
-        season = int(mobj.group('season'))
-        episode = int(mobj.group('episode'))
-        video_id = f'{show_slug}-s{season}e{episode}'
+        show_slug = mobj.group("show")
+        season = int(mobj.group("season"))
+        episode = int(mobj.group("episode"))
+        video_id = f"{show_slug}-s{season}e{episode}"
         page_html, m3u8_url, user_agent, cookie_header = self._nepu_resolve(url, video_id)
 
-        series = self._html_search_regex(
-            r'<h1[^>]*>([^<]+)</h1>', page_html, 'series',
-            default=None, fatal=False)
+        series = self._html_search_regex(r"<h1[^>]*>([^<]+)</h1>", page_html, "series", default=None, fatal=False)
         if not series:
-            series = _strip_og_title_marketing(
-                self._og_search_title(page_html, default=None))
+            series = _strip_og_title_marketing(self._og_search_title(page_html, default=None))
         if series:
             series = series.strip()
 
@@ -645,32 +669,38 @@ class NepuEpisodeIE(_NepuResolverMixin, InfoExtractor):
         # would be over-engineering -- the first h2 is the right one in
         # observed markup.
         episode_title = self._html_search_regex(
-            r'<h2[^>]*>([^<]+)</h2>', page_html, 'episode title',
-            default=None, fatal=False)
+            r"<h2[^>]*>([^<]+)</h2>", page_html, "episode title", default=None, fatal=False
+        )
         if episode_title:
             episode_title = episode_title.strip()
 
         if series and episode_title:
-            full_title = f'{series} - {episode_title}'
+            full_title = f"{series} - {episode_title}"
         elif series:
-            full_title = f'{series} S{season:02d}E{episode:02d}'
+            full_title = f"{series} S{season:02d}E{episode:02d}"
         else:
             full_title = video_id
 
         return {
-            'id': video_id,
-            'title': full_title,
-            'url': m3u8_url,
-            'ext': 'mp4',
-            'protocol': 'm3u8_native',
-            'http_headers': _http_headers_for(url, user_agent, cookie_header),
-            'series': series,
-            'season_number': season,
-            'episode_number': episode,
-            'episode': episode_title,
-            'description': self._og_search_description(page_html, default=None),
-            'thumbnail': self._og_search_thumbnail(page_html, default=None),
-            'release_date': unified_strdate(self._html_search_regex(
-                r'(?i)(?:air\s*date|aired)[^<]*<[^>]+>\s*([0-9A-Za-z ,/-]+)',
-                page_html, 'air date', default=None, fatal=False)),
+            "id": video_id,
+            "title": full_title,
+            "url": m3u8_url,
+            "ext": "mp4",
+            "protocol": "m3u8_native",
+            "http_headers": _http_headers_for(url, user_agent, cookie_header),
+            "series": series,
+            "season_number": season,
+            "episode_number": episode,
+            "episode": episode_title,
+            "description": self._og_search_description(page_html, default=None),
+            "thumbnail": self._og_search_thumbnail(page_html, default=None),
+            "release_date": unified_strdate(
+                self._html_search_regex(
+                    r"(?i)(?:air\s*date|aired)[^<]*<[^>]+>\s*([0-9A-Za-z ,/-]+)",
+                    page_html,
+                    "air date",
+                    default=None,
+                    fatal=False,
+                )
+            ),
         }

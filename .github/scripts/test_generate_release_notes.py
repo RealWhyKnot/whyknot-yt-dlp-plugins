@@ -9,7 +9,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 MODULE_PATH = SCRIPT_DIR / "generate_release_notes.py"
 
@@ -76,9 +75,7 @@ def main() -> int:
         run("git", "config", "user.name", "Release Test", cwd=repo)
         (repo / ".github" / "release-template").mkdir(parents=True)
         for name in ("links", "install", "local-dev", "what-you-need-to-do"):
-            (repo / ".github" / "release-template" / f"{name}.md").write_text(
-                "", encoding="utf-8"
-            )
+            (repo / ".github" / "release-template" / f"{name}.md").write_text("", encoding="utf-8")
 
         commit_file(repo, "sample.txt", "base\n", "chore: base")
         run("git", "tag", "v2026.5.1.0", cwd=repo)

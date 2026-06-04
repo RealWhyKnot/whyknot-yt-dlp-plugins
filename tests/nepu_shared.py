@@ -1,32 +1,29 @@
 from __future__ import annotations
 
 import json
-import re
 import urllib.parse
 
 import pytest
-
 from yt_dlp import YoutubeDL
 
 from yt_dlp_plugins.extractor.nepu import (
-    NepuMovieIE,
-    NepuEpisodeIE,
     _BYPASS_ENV,
     _CACHE_DIR_ENV,
     _CACHE_FILENAME,
     _CACHE_SUBDIR,
     _CACHE_TTL_SECONDS,
     _EMBED_API,
+    NepuEpisodeIE,
+    NepuMovieIE,
 )
-
 
 # ---------------------------------------------------------------------------
 # Inline HTML fixtures
 # ---------------------------------------------------------------------------
 
-_FIXTURE_EMBED_ID = '8675309'
-_FIXTURE_M3U8_PATH = '/public/m3u8/0123456789.m3u8'
-_FIXTURE_M3U8 = 'https://nepu.to' + _FIXTURE_M3U8_PATH
+_FIXTURE_EMBED_ID = "8675309"
+_FIXTURE_M3U8_PATH = "/public/m3u8/0123456789.m3u8"
+_FIXTURE_M3U8 = "https://nepu.to" + _FIXTURE_M3U8_PATH
 
 # The movie/episode page no longer carries the m3u8 URL directly. What it
 # does carry is a hidden `data-embed="<id>"` on a player-source anchor +
@@ -89,6 +86,7 @@ _EMBED_RESPONSE = f"""<script>
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_extractor(cls, page_html, embed_html=_EMBED_RESPONSE):
     """Build a `cls` instance whose page fetch returns page_html and
     whose /ajax/embed POST returns embed_html.
@@ -98,21 +96,21 @@ def _make_extractor(cls, page_html, embed_html=_EMBED_RESPONSE):
     implementation. We monkeypatch `_download_webpage` to route based
     on the URL argument.
     """
-    ydl = YoutubeDL({'quiet': True, 'no_warnings': True, 'skip_download': True})
+    ydl = YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True})
     ie = cls(ydl)
 
-    captured = {'webpage_calls': []}
+    captured = {"webpage_calls": []}
 
     def fake_download_webpage(url_or_request, video_id, *args, **kwargs):
         # _download_webpage receives a URL string when called with a
         # plain url, or a Request object for POSTs. Normalise.
         url = url_or_request if isinstance(url_or_request, str) else url_or_request.url
         entry = {
-            'url': url,
-            'data': kwargs.get('data'),
-            'headers': kwargs.get('headers') or {},
+            "url": url,
+            "data": kwargs.get("data"),
+            "headers": kwargs.get("headers") or {},
         }
-        captured['webpage_calls'].append(entry)
+        captured["webpage_calls"].append(entry)
         if _EMBED_API in url:
             return embed_html
         return page_html
@@ -125,55 +123,58 @@ def _make_extractor(cls, page_html, embed_html=_EMBED_RESPONSE):
 # URL regex tests -- movies
 # ---------------------------------------------------------------------------
 
-def _make_extractor_with_bypass(cls, response_body=_MOVIE_HTML, status='ok',
-                                 message=None, cookies=None, user_agent=None,
-                                 embed_html=_EMBED_RESPONSE):
-    ydl = YoutubeDL({'quiet': True, 'no_warnings': True, 'skip_download': True})
+
+def _make_extractor_with_bypass(
+    cls, response_body=_MOVIE_HTML, status="ok", message=None, cookies=None, user_agent=None, embed_html=_EMBED_RESPONSE
+):
+    ydl = YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True})
     ie = cls(ydl)
 
-    captured = {'bypass_call': None, 'webpage_calls': []}
+    captured = {"bypass_call": None, "webpage_calls": []}
 
     def fake_download_json(url_or_request, video_id, *args, **kwargs):
         # The extractor passes a yt_dlp.networking.Request so it can
         # attach an extended socket timeout. Normalise so the tests can
         # introspect either path.
-        if hasattr(url_or_request, 'url'):
-            captured['bypass_call'] = {
-                'url': url_or_request.url,
-                'video_id': video_id,
-                'data': url_or_request.data,
-                'headers': dict(url_or_request.headers),
-                'extensions': dict(getattr(url_or_request, 'extensions', {}) or {}),
-                'method': url_or_request.method,
+        if hasattr(url_or_request, "url"):
+            captured["bypass_call"] = {
+                "url": url_or_request.url,
+                "video_id": video_id,
+                "data": url_or_request.data,
+                "headers": dict(url_or_request.headers),
+                "extensions": dict(getattr(url_or_request, "extensions", {}) or {}),
+                "method": url_or_request.method,
             }
         else:
-            captured['bypass_call'] = {
-                'url': url_or_request,
-                'video_id': video_id,
-                'data': kwargs.get('data') or (args[0] if args else None),
-                'headers': kwargs.get('headers'),
-                'extensions': {},
-                'method': 'GET',
+            captured["bypass_call"] = {
+                "url": url_or_request,
+                "video_id": video_id,
+                "data": kwargs.get("data") or (args[0] if args else None),
+                "headers": kwargs.get("headers"),
+                "extensions": {},
+                "method": "GET",
             }
         envelope = {
-            'status': status,
-            'solution': {
-                'response': response_body,
-                'cookies': cookies or [],
-                'userAgent': user_agent or '',
+            "status": status,
+            "solution": {
+                "response": response_body,
+                "cookies": cookies or [],
+                "userAgent": user_agent or "",
             },
         }
         if message is not None:
-            envelope['message'] = message
+            envelope["message"] = message
         return envelope
 
     def fake_download_webpage(url_or_request, video_id, *args, **kwargs):
         url = url_or_request if isinstance(url_or_request, str) else url_or_request.url
-        captured['webpage_calls'].append({
-            'url': url,
-            'data': kwargs.get('data'),
-            'headers': kwargs.get('headers') or {},
-        })
+        captured["webpage_calls"].append(
+            {
+                "url": url,
+                "data": kwargs.get("data"),
+                "headers": kwargs.get("headers") or {},
+            }
+        )
         if _EMBED_API in url:
             return embed_html
         return response_body
@@ -182,51 +183,53 @@ def _make_extractor_with_bypass(cls, response_body=_MOVIE_HTML, status='ok',
     ie._download_webpage = fake_download_webpage  # type: ignore[assignment]
     return ie, captured
 
-def _write_cache(dir_path, cookies, user_agent='UA-cache', saved_at=None):
+
+def _write_cache(dir_path, cookies, user_agent="UA-cache", saved_at=None):
     import json as _json
-    import time as _time
     import os as _os
-    from yt_dlp_plugins.extractor.nepu import _CACHE_SUBDIR
+    import time as _time
+
     payload = {
-        'saved_at': saved_at if saved_at is not None else int(_time.time()),
-        'user_agent': user_agent,
-        'cookies': cookies,
+        "saved_at": saved_at if saved_at is not None else int(_time.time()),
+        "user_agent": user_agent,
+        "cookies": cookies,
     }
     subdir = _os.path.join(dir_path, _CACHE_SUBDIR)
     _os.makedirs(subdir, exist_ok=True)
-    with open(_os.path.join(subdir, _CACHE_FILENAME), 'w', encoding='utf-8') as f:
+    with open(_os.path.join(subdir, _CACHE_FILENAME), "w", encoding="utf-8") as f:
         _json.dump(payload, f)
 
 
-def _make_extractor_with_bypass_and_webpage(cls, response_body, cookies, user_agent='UA-bypass',
-                                             embed_html=_EMBED_RESPONSE,
-                                             page_html_override=None):
+def _make_extractor_with_bypass_and_webpage(
+    cls, response_body, cookies, user_agent="UA-bypass", embed_html=_EMBED_RESPONSE, page_html_override=None
+):
     """Build an extractor that:
-       - returns `response_body` (and `cookies`, `user_agent`) from the bypass /v1 call
-       - returns `embed_html` from a /ajax/embed POST
-       - returns `page_html_override or response_body` from a direct page GET
-       Captures every call so tests can assert which paths fired.
+    - returns `response_body` (and `cookies`, `user_agent`) from the bypass /v1 call
+    - returns `embed_html` from a /ajax/embed POST
+    - returns `page_html_override or response_body` from a direct page GET
+    Captures every call so tests can assert which paths fired.
     """
-    ydl = YoutubeDL({'quiet': True, 'no_warnings': True, 'skip_download': True})
+    ydl = YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True})
     ie = cls(ydl)
 
-    captured = {'bypass_calls': 0, 'webpage_calls': [], 'cookies_seeded': cookies}
+    captured = {"bypass_calls": 0, "webpage_calls": [], "cookies_seeded": cookies}
 
     def fake_download_json(url_or_request, video_id, *args, **kwargs):
-        captured['bypass_calls'] += 1
+        captured["bypass_calls"] += 1
         return {
-            'status': 'ok',
-            'solution': {
-                'response': response_body,
-                'cookies': cookies,
-                'userAgent': user_agent,
+            "status": "ok",
+            "solution": {
+                "response": response_body,
+                "cookies": cookies,
+                "userAgent": user_agent,
             },
         }
 
     def fake_download_webpage(url_or_request, video_id, *args, **kwargs):
         url = url_or_request if isinstance(url_or_request, str) else url_or_request.url
-        captured['webpage_calls'].append({'url': url, 'data': kwargs.get('data'),
-                                          'headers': kwargs.get('headers') or {}})
+        captured["webpage_calls"].append(
+            {"url": url, "data": kwargs.get("data"), "headers": kwargs.get("headers") or {}}
+        )
         if _EMBED_API in url:
             return embed_html
         return page_html_override if page_html_override is not None else response_body
@@ -235,4 +238,28 @@ def _make_extractor_with_bypass_and_webpage(cls, response_body, cookies, user_ag
     ie._download_webpage = fake_download_webpage  # type: ignore[assignment]
     return ie, captured
 
-__all__ = [name for name in globals() if not name.startswith('__')]
+
+__all__ = [
+    "json",
+    "pytest",
+    "urllib",
+    "YoutubeDL",
+    "NepuEpisodeIE",
+    "NepuMovieIE",
+    "_BYPASS_ENV",
+    "_CACHE_DIR_ENV",
+    "_CACHE_FILENAME",
+    "_CACHE_SUBDIR",
+    "_CACHE_TTL_SECONDS",
+    "_EMBED_API",
+    "_FIXTURE_EMBED_ID",
+    "_FIXTURE_M3U8_PATH",
+    "_FIXTURE_M3U8",
+    "_MOVIE_HTML",
+    "_EPISODE_HTML",
+    "_EMBED_RESPONSE",
+    "_make_extractor",
+    "_make_extractor_with_bypass",
+    "_write_cache",
+    "_make_extractor_with_bypass_and_webpage",
+]

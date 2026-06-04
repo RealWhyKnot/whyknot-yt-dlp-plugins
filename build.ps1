@@ -28,8 +28,12 @@ param(
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
-$BuildDir  = Join-Path $PSScriptRoot "dist"
+$BuildDir = Join-Path $PSScriptRoot "dist"
 $StateFile = Join-Path $PSScriptRoot ".local_build_state.json"
+$VersionFile = Join-Path $PSScriptRoot "version.txt"
+$Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
+try { & git config --local core.hooksPath .githooks 2>$null } catch {}
 
 # --- Versioning ---
 if ($Version) {
@@ -42,8 +46,10 @@ if ($Version) {
     #   2026.5.17.0-beta -> 2026.5.17.0b0
     # If you need to ship a second pre-release for the same numeric base,
     # bump the patch instead (2026.5.17.1-beta).
-    $FullVersion = $Version -replace '-beta$','b0'
-} else {
+    $HookVersion = $Version
+    $FullVersion = $Version -replace '-beta$', 'b0'
+}
+else {
     $Today = Get-Date -Format "yyyy.M.d"
     $BuildCount = 0
     if (Test-Path $StateFile) {
@@ -51,15 +57,16 @@ if ($Version) {
         if ($State.Date -eq $Today) { $BuildCount = [int]$State.Count + 1 }
     }
     $FullVersion = "$Today.$BuildCount"
+    $HookVersion = $FullVersion
     @{ Date = $Today; Count = $BuildCount } | ConvertTo-Json | Out-File $StateFile -Encoding utf8
 }
+[System.IO.File]::WriteAllText($VersionFile, $HookVersion, $Utf8NoBom)
 Write-Host "Building Version: $FullVersion" -ForegroundColor Magenta
 
 # --- Update pyproject.toml in place ---
 $Pyproject = Join-Path $PSScriptRoot "pyproject.toml"
 $content = Get-Content $Pyproject -Raw
 $content = $content -replace '(?m)^version = "[^"]+"', "version = `"$FullVersion`""
-$Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($Pyproject, $content, $Utf8NoBom)
 
 # --- Build sdist + wheel ---
@@ -70,12 +77,13 @@ if (-not $SkipBuild) {
     # Use uv if available (faster + matches the production install path);
     # fall back to `python -m build` for environments without uv.
     $buildTool = if (Get-Command uv -ErrorAction SilentlyContinue) { "uv" }
-                 elseif (Get-Command pip -ErrorAction SilentlyContinue) { "pip" }
-                 else { throw "Neither uv nor pip is on PATH; cannot build artifacts." }
+    elseif (Get-Command pip -ErrorAction SilentlyContinue) { "pip" }
+    else { throw "Neither uv nor pip is on PATH; cannot build artifacts." }
 
     if ($buildTool -eq "uv") {
         & uv build --out-dir $BuildDir
-    } else {
+    }
+    else {
         # Ensure `build` is installed; non-fatal if already present.
         & python -m pip install --quiet --upgrade build
         & python -m build --outdir $BuildDir

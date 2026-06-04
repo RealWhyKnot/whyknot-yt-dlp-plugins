@@ -37,6 +37,11 @@ test = [
     "pytest>=7",
     "yt-dlp",
 ]
+dev = [
+    "pytest>=7",
+    "ruff>=0.8",
+    "yt-dlp",
+]
 
 [project.urls]
 Homepage = "https://whyknot.dev"
@@ -53,3 +58,23 @@ packages = ["yt_dlp_plugins"]
 
 [tool.hatch.build.targets.sdist]
 include = ["/yt_dlp_plugins", "/README.md", "/CHANGELOG.md", "/LICENSE", "/pyproject.toml"]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 120
+exclude = [
+    ".eggs",
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "build",
+    "dist",
+]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/test_nepu_*.py" = ["F403", "F405"]

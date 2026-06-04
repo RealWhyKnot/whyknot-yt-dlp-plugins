@@ -93,22 +93,22 @@ PRERELEASE_TAG_RE = re.compile(r"^v?\d{4}\.\d+\.\d+\.\d+-.+")
 
 # ASCII normalisation table. Applied silently before the strict scrub.
 ASCII_SUBS = {
-    "—": "--",        # em-dash
-    "–": "-",         # en-dash
-    "…": "...",       # ellipsis
-    "“": '"',         # left double quote
-    "”": '"',         # right double quote
-    "‘": "'",         # left single quote
-    "’": "'",         # right single quote
-    " ": " ",         # non-breaking space
-    "•": "*",         # bullet
-    "×": "x",         # multiplication sign
-    "→": "->",        # right arrow
-    "←": "<-",        # left arrow
-    "⇒": "=>",        # double right arrow
-    "⇐": "<=",        # double left arrow
-    "§": "section",   # section sign
-    "¶": "paragraph", # pilcrow
+    "—": "--",  # em-dash
+    "–": "-",  # en-dash
+    "…": "...",  # ellipsis
+    "“": '"',  # left double quote
+    "”": '"',  # right double quote
+    "‘": "'",  # left single quote
+    "’": "'",  # right single quote
+    " ": " ",  # non-breaking space
+    "•": "*",  # bullet
+    "×": "x",  # multiplication sign
+    "→": "->",  # right arrow
+    "←": "<-",  # left arrow
+    "⇒": "=>",  # double right arrow
+    "⇐": "<=",  # double left arrow
+    "§": "section",  # section sign
+    "¶": "paragraph",  # pilcrow
 }
 
 # Voice + internal-only-vocabulary patterns. The release body is the public
@@ -148,16 +148,12 @@ def warn(msg: str) -> None:
 
 
 def run_git(*args: str) -> tuple[int, str]:
-    p = subprocess.run(
-        ["git", *args], capture_output=True, text=True, encoding="utf-8", errors="replace"
-    )
+    p = subprocess.run(["git", *args], capture_output=True, text=True, encoding="utf-8", errors="replace")
     return p.returncode, (p.stdout or "").strip()
 
 
 def run_gh(*args: str) -> tuple[int, str]:
-    p = subprocess.run(
-        ["gh", *args], capture_output=True, text=True, encoding="utf-8", errors="replace"
-    )
+    p = subprocess.run(["gh", *args], capture_output=True, text=True, encoding="utf-8", errors="replace")
     return p.returncode, (p.stdout or "").strip()
 
 
@@ -191,16 +187,19 @@ def resolve_prev_tag(tag: str, repo: str | None) -> dict:
     # Layer 2: subject-match the most recent published GitHub release.
     if repo:
         rc, list_json = run_gh(
-            "release", "list", "--repo", repo, "--limit", "20",
-            "--json", "tagName,publishedAt,isPrerelease",
+            "release",
+            "list",
+            "--repo",
+            repo,
+            "--limit",
+            "20",
+            "--json",
+            "tagName,publishedAt,isPrerelease",
         )
         if rc == 0 and list_json:
             try:
                 releases = json.loads(list_json)
-                non_pre = [
-                    r for r in releases
-                    if r.get("tagName") != tag and not r.get("isPrerelease")
-                ]
+                non_pre = [r for r in releases if r.get("tagName") != tag and not r.get("isPrerelease")]
                 non_pre.sort(key=lambda r: r.get("publishedAt", ""), reverse=True)
                 candidate = non_pre[0] if non_pre else None
             except (json.JSONDecodeError, KeyError) as exc:
@@ -211,13 +210,9 @@ def resolve_prev_tag(tag: str, repo: str | None) -> dict:
                 cand_tag = candidate["tagName"]
                 rc, orphan_sha = run_git("rev-parse", cand_tag)
                 if rc == 0 and orphan_sha:
-                    rc, orphan_subject = run_git(
-                        "show", "-s", "--format=%s", orphan_sha
-                    )
+                    rc, orphan_subject = run_git("show", "-s", "--format=%s", orphan_sha)
                     if rc == 0 and orphan_subject:
-                        rc, log_lines = run_git(
-                            "log", tag, "--format=%H%x09%s"
-                        )
+                        rc, log_lines = run_git("log", tag, "--format=%H%x09%s")
                         if rc == 0 and log_lines:
                             for line in log_lines.splitlines():
                                 if "\t" not in line:
@@ -261,9 +256,7 @@ def resolve_prev_tag(tag: str, repo: str | None) -> dict:
 
 def collect_entries(log_args: list[str]) -> list[dict]:
     """Pull commit slice and parse into entry dicts."""
-    rc, raw = run_git(
-        "log", *log_args, "--no-merges", "--pretty=format:%H\t%h\t%an\t%s"
-    )
+    rc, raw = run_git("log", *log_args, "--no-merges", "--pretty=format:%H\t%h\t%an\t%s")
     if rc != 0 or not raw:
         return []
 
@@ -279,9 +272,7 @@ def collect_entries(log_args: list[str]) -> list[dict]:
             author = AUTHOR_HANDLE_MAP[author]
         subject = VERSION_STAMP_RE.sub(" ", subject)
         subject = WHITESPACE_RE.sub(" ", subject).strip()
-        entries.append(
-            {"sha": sha, "short": short, "author": author, "subject": subject}
-        )
+        entries.append({"sha": sha, "short": short, "author": author, "subject": subject})
     return entries
 
 
@@ -330,9 +321,7 @@ def scrub(body: str) -> str:
         for col, ch in enumerate(line, start=1):
             code = ord(ch)
             if not ((0x20 <= code <= 0x7E) or code == 9):
-                offenders.append(
-                    f"  line {ln} col {col}: U+{code:04X} in: {line}"
-                )
+                offenders.append(f"  line {ln} col {col}: U+{code:04X} in: {line}")
     if offenders:
         joined = "\n".join(offenders)
         raise SystemExit(
@@ -387,9 +376,7 @@ def compose(args: argparse.Namespace) -> str:
         )
 
     # Conventional-commit coverage warning (do not fail).
-    non_conforming = [
-        e for e in entries if not CONVENTIONAL_RE.match(e["subject"])
-    ]
+    non_conforming = [e for e in entries if not CONVENTIONAL_RE.match(e["subject"])]
     if non_conforming:
         warn(
             f"{len(non_conforming)} commit(s) in range {prev['display']} do not "
@@ -428,7 +415,7 @@ def compose(args: argparse.Namespace) -> str:
         for e in entries:
             key = categorise(e["subject"])
             bucketed.setdefault(key, []).append(e)
-        for (order, name) in sorted(bucketed.keys(), key=lambda k: k[0]):
+        for order, name in sorted(bucketed.keys(), key=lambda k: k[0]):
             out.append(f"### {name}")
             for e in bucketed[(order, name)]:
                 out.append(f"- {e['subject']} by @{e['author']} in {e['short']}")
@@ -446,17 +433,15 @@ def compose(args: argparse.Namespace) -> str:
         out.append("")
         out.append("## File integrity")
         out.append("")
-        out.append("Verify with `sha256sum <file>` on Linux/macOS or `Get-FileHash <file> -Algorithm SHA256` on PowerShell.")
+        out.append(
+            "Verify with `sha256sum <file>` on Linux/macOS or `Get-FileHash <file> -Algorithm SHA256` on PowerShell."
+        )
         out.append("")
         out.append("```")
         wheel_name = Path(args.wheel).name
         sdist_name = Path(args.sdist).name
-        out.append(
-            f"{wheel_name:<48}    {format_bytes(args.wheel_size):>10}    SHA256: {args.wheel_sha.upper()}"
-        )
-        out.append(
-            f"{sdist_name:<48}    {format_bytes(args.sdist_size):>10}    SHA256: {args.sdist_sha.upper()}"
-        )
+        out.append(f"{wheel_name:<48}    {format_bytes(args.wheel_size):>10}    SHA256: {args.wheel_sha.upper()}")
+        out.append(f"{sdist_name:<48}    {format_bytes(args.sdist_size):>10}    SHA256: {args.sdist_sha.upper()}")
         out.append("```")
 
     # Templated evergreen sections in fixed order.
@@ -468,9 +453,7 @@ def compose(args: argparse.Namespace) -> str:
             out.append(section)
 
     # Optional release-specific extras.
-    extras_path = Path(args.extras) if args.extras else (
-        Path.cwd() / ".github" / "release-extras" / f"{tag}.md"
-    )
+    extras_path = Path(args.extras) if args.extras else (Path.cwd() / ".github" / "release-extras" / f"{tag}.md")
     if extras_path.exists():
         extras_content = extras_path.read_text(encoding="utf-8").strip()
         if extras_content:

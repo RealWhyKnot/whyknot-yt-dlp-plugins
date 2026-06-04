@@ -38,8 +38,9 @@ def find_unreleased(text: str) -> tuple[int, int]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tag", required=True, help="Tag name e.g. v2026.5.5.0")
-    parser.add_argument("--notes-only", action="store_true",
-                        help="Print the Unreleased body to stdout, don't mutate the file.")
+    parser.add_argument(
+        "--notes-only", action="store_true", help="Print the Unreleased body to stdout, don't mutate the file."
+    )
     args = parser.parse_args()
 
     text = CHANGELOG.read_text(encoding="utf-8")
@@ -60,14 +61,7 @@ def main() -> int:
 
     # Replace the "## Unreleased" line with the versioned heading, and prepend
     # a fresh "## Unreleased" section + separator above it.
-    fresh_unreleased = (
-        "## Unreleased\n"
-        "\n"
-        "_No notable changes since the last release._\n"
-        "\n"
-        "---\n"
-        "\n"
-    )
+    fresh_unreleased = "## Unreleased\n\n_No notable changes since the last release._\n\n---\n\n"
     # Find the literal "## Unreleased" line and rewrite it.
     new_text = re.sub(
         r"(?m)^## +Unreleased\s*$",

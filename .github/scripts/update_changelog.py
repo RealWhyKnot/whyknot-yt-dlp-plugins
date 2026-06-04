@@ -110,7 +110,9 @@ def main() -> int:
 
     log = subprocess.run(
         ["git", "log", "--no-merges", "--format=%H%x09%s", args.range],
-        check=True, capture_output=True, text=True,
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout
 
     new: dict[str, list[str]] = {}

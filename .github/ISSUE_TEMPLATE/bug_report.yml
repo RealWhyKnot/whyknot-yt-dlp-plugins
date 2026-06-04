@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Before filing, check the README and wiki: https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins/wiki
+        Before filing, check the README: https://github.com/RealWhyKnot/whyknot-yt-dlp-plugins#readme
 
   - type: textarea
     id: what-happened

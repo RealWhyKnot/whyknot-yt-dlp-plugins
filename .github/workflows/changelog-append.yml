@@ -8,10 +8,8 @@ name: Changelog append
 # plain `git push` of an unsigned commit gets GH006).
 #
 # Spirit-port of WKVRCProxy/.github/workflows/changelog-append.yml. Differences:
-#   - Single CHANGELOG.md (no wiki/Changelog.md mirror; this repo has no wiki).
 #   - Inline python3 bucketing via .github/scripts/update_changelog.py instead
 #     of pwsh, since the rest of this repo's tooling is Python.
-#   - No wiki-sync trigger (no wiki).
 #
 # A commit made by GITHUB_TOKEN (whether via push or via createCommitOnBranch)
 # does NOT trigger workflow runs, so the appender's own commit will not recurse.

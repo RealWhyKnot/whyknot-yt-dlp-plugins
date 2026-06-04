@@ -9,7 +9,6 @@ commits, "[skip changelog]" subjects, and types that aren't user-visible
 (docs/build/ci/test/non-deps chore).
 
 Differences from the WKVRCProxy version:
-  - No wiki/Changelog.md dual-write (this repo has no wiki)
   - No build-stamp regex strip (no prepare-commit-msg hook in this repo)
   - Promote/Notes modes deferred -- release.yml inlines that logic
 

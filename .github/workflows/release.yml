@@ -68,7 +68,13 @@ jobs:
 
       - name: Validate scripts
         shell: pwsh
-        run: ./.github/scripts/Test-WorkflowSyntax.ps1
+        run: |
+          ./.github/scripts/Test-WorkflowSyntax.ps1
+          ./.github/scripts/Test-ReleaseVersionSequence.ps1
+
+      - name: Validate release version sequence
+        shell: pwsh
+        run: ./.github/scripts/Assert-ReleaseVersionSequence.ps1 -Tag '${{ github.ref_name }}'
 
       - name: Test release notes
         run: python .github/scripts/test_generate_release_notes.py

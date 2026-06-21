@@ -10,8 +10,10 @@ release versioning where N is the daily build counter starting at 0).
 
 
 
+
 ### Changed
 - Split nepu extractor tests by behavior (17aa5ac)
+- **deps:** Bump actions/checkout from 6 to 7 (#3) (86f4767)
 
 ### Fixed
 - **nepu:** Mirror session under segment CDN apex (aadcb84)
